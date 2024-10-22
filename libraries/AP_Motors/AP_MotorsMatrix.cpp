@@ -35,7 +35,7 @@ void AP_MotorsMatrix::init(motor_frame_class frame_class, motor_frame_type frame
     setup_motors(frame_class, frame_type);
 
     // enable fast channels or instant pwm
-    set_update_rate(_speed_hz);
+    set_update_rate(_speed_hz); //fdew
 }
 
 #if AP_SCRIPTING_ENABLED
