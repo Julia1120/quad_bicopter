@@ -17,6 +17,9 @@
 #include "AP_MotorsMatrix.h"
 #include <AP_Vehicle/AP_Vehicle_Type.h>
 
+#include <SRV_Channel/SRV_Channel.h>
+#define SERVO_OUTPUT_RANGE  4500
+
 extern const AP_HAL::HAL& hal;
 
 // init
@@ -35,7 +38,7 @@ void AP_MotorsMatrix::init(motor_frame_class frame_class, motor_frame_type frame
     setup_motors(frame_class, frame_type);
 
     // enable fast channels or instant pwm
-    set_update_rate(_speed_hz);
+    set_update_rate(_speed_hz); 
 }
 
 #if AP_SCRIPTING_ENABLED
@@ -54,6 +57,14 @@ bool AP_MotorsMatrix::init(uint8_t expected_num_motors)
             num_motors++;
         }
     }
+
+    _has_diff_thrust = SRV_Channels::function_assigned(SRV_Channel::k_throttleRight) || SRV_Channels::function_assigned(SRV_Channel::k_throttleLeft);
+    SRV_Channels::set_aux_channel_default(SRV_Channel::k_tiltMotorRight, CH_6);
+    SRV_Channels::set_angle(SRV_Channel::k_tiltMotorRight, SERVO_OUTPUT_RANGE);
+
+    // left servo defaults to servo output 4
+    SRV_Channels::set_aux_channel_default(SRV_Channel::k_tiltMotorLeft, CH_5);
+    SRV_Channels::set_angle(SRV_Channel::k_tiltMotorLeft, SERVO_OUTPUT_RANGE);
 
     set_initialised_ok(expected_num_motors == num_motors);
 
@@ -180,6 +191,10 @@ void AP_MotorsMatrix::output_to_motors()
             rc_write(i, output_to_pwm(_actuator[i]));
         }
     }
+
+    SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorLeft, _tilt_front*SERVO_OUTPUT_RANGE);
+    SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRight, _tilt_back*SERVO_OUTPUT_RANGE);
+    
 }
 
 // get_motor_mask - returns a bitmask of which outputs are being used for motors (1 means being used)

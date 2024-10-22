@@ -155,6 +155,12 @@ protected:
     const char*         _frame_class_string = ""; // string representation of frame class
     const char*         _frame_type_string = "";  //  string representation of frame type
 
+        
+    bool _has_diff_thrust;
+    float _tilt_front;  // -1..1
+    float _tilt_back;  // -1..1
+    
+
 private:
 
     // helper to return value scaled between boost and normal based on the value of _thrust_boost_ratio
