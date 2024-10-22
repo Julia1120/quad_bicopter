@@ -64,7 +64,7 @@ bool AP_MotorsMatrix::init(uint8_t expected_num_motors)
 
     // left servo defaults to servo output 4
     SRV_Channels::set_aux_channel_default(SRV_Channel::k_tiltMotorLeft, CH_5);
-    SRV_Channels::set_angle(SRV_Channel::k_tiltMotorLeft, SERVO_OUTPUT_RANGE);
+    SRV_Channels::set_angle(SRV_Channel::k_tiltMotorLeft, SERVO_OUTPUT_RANGE); // houh
 
     set_initialised_ok(expected_num_motors == num_motors);
 
