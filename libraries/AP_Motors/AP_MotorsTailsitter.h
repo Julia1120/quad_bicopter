@@ -43,10 +43,15 @@ protected:
 
     // calculated outputs
     float _throttle; // 0..1
-    float _tilt_left;  // -1..1
-    float _tilt_right;  // -1..1
-    float _thrust_left;  // 0..1
-    float _thrust_right;  // 0..1
+    float _tilt_front;  // -1..1
+    float _tilt_back;  // -1..1
+    float _thrust_front;  // 0..1
+    float _thrust_back;  // 0..1
+
+    float _thrust_motor1;
+    float _thrust_motor2;
+    float _thrust_motor3;
+    float _thrust_motor4;
 
     // Set by tailsitters using diskloading minumum outflow velocity limit
     float _external_min_throttle;

@@ -58,13 +58,13 @@ bool AP_MotorsMatrix::init(uint8_t expected_num_motors)
         }
     }
 
-    _has_diff_thrust = SRV_Channels::function_assigned(SRV_Channel::k_throttleRight) || SRV_Channels::function_assigned(SRV_Channel::k_throttleLeft);
+    _has_diff_thrust = SRV_Channels::function_assigned(SRV_Channel::k_throttleRight) || SRV_Channels::function_assigned(SRV_Channel::k_throttleLeft);   // 61-67行是加的四旋翼模式下控制舵机不要动的，不是原始代码
     SRV_Channels::set_aux_channel_default(SRV_Channel::k_tiltMotorRight, CH_6);
     SRV_Channels::set_angle(SRV_Channel::k_tiltMotorRight, SERVO_OUTPUT_RANGE);
 
     // left servo defaults to servo output 4
     SRV_Channels::set_aux_channel_default(SRV_Channel::k_tiltMotorLeft, CH_5);
-    SRV_Channels::set_angle(SRV_Channel::k_tiltMotorLeft, SERVO_OUTPUT_RANGE);
+    SRV_Channels::set_angle(SRV_Channel::k_tiltMotorLeft, SERVO_OUTPUT_RANGE); 
 
     set_initialised_ok(expected_num_motors == num_motors);
 
@@ -192,7 +192,7 @@ void AP_MotorsMatrix::output_to_motors()
         }
     }
 
-    SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorLeft, _tilt_front*SERVO_OUTPUT_RANGE);
+    SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorLeft, _tilt_front*SERVO_OUTPUT_RANGE);    // 195-196行是加的四旋翼模式下控制舵机不要动的，不是原始代码
     SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRight, _tilt_back*SERVO_OUTPUT_RANGE);
     
 }
@@ -288,7 +288,7 @@ void AP_MotorsMatrix::output_armed_stabilizing()
 
     // calculate amount of yaw we can fit into the throttle range
     // this is always equal to or less than the requested yaw from the pilot or rate controller
-    float yaw_allowed = 1.0f; // amount of yaw we can fit in
+    float yaw_allowed = 1.0f; // amount of yaw we can fit in  加上下面一个if计算可用的偏航推力
     for (uint8_t i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {
         if (motor_enabled[i]) {
             // calculate the thrust outputs for roll and pitch
@@ -348,7 +348,7 @@ void AP_MotorsMatrix::output_armed_stabilizing()
     // add yaw control to thrust outputs
     float rpy_low = 1.0f;   // lowest thrust value
     float rpy_high = -1.0f; // highest thrust value
-    for (uint8_t i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {
+    for (uint8_t i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {   //计算和调整推力输出
         if (motor_enabled[i]) {
             _thrust_rpyt_out[i] = _thrust_rpyt_out[i] + yaw_thrust * _yaw_factor[i];
 
