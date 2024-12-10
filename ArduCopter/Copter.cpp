@@ -121,7 +121,7 @@ const AP_Scheduler::Task Copter::scheduler_tasks[] = {
     FAST_TASK(heli_update_autorotation),
 #endif //HELI_FRAME
     // send outputs to the motors library immediately
-    FAST_TASK(motors_output),
+    FAST_TASK(motors_output),//向电机输出
      // run EKF state estimator (expensive)
     FAST_TASK(read_AHRS),
 #if FRAME_CONFIG == HELI_FRAME
@@ -473,7 +473,7 @@ bool Copter::current_mode_requires_mission() const
 
 // rc_loops - reads user input from transmitter/receiver
 // called at 100hz
-void Copter::rc_loop()
+void Copter::rc_loop()//读取信号还有拨杆信息
 {
     // Read radio and 3-position switch on radio
     // -----------------------------------------

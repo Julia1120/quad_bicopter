@@ -17,6 +17,8 @@
 #include "AP_MotorsMatrix.h"
 #include <AP_Vehicle/AP_Vehicle_Type.h>
 
+#include <GCS_MAVLink/GCS.h>
+
 #include <SRV_Channel/SRV_Channel.h>
 #define SERVO_OUTPUT_RANGE  4500
 
@@ -58,13 +60,18 @@ bool AP_MotorsMatrix::init(uint8_t expected_num_motors)
         }
     }
 
-    _has_diff_thrust = SRV_Channels::function_assigned(SRV_Channel::k_throttleRight) || SRV_Channels::function_assigned(SRV_Channel::k_throttleLeft);   // 61-67行是加的四旋翼模式下控制舵机不要动的，不是原始代码
+    _has_diff_thrust = SRV_Channels::function_assigned(SRV_Channel::k_throttleRight) || SRV_Channels::function_assigned(SRV_Channel::k_throttleLeft);   //加入两个倾转舵机
     SRV_Channels::set_aux_channel_default(SRV_Channel::k_tiltMotorRight, CH_6);
     SRV_Channels::set_angle(SRV_Channel::k_tiltMotorRight, SERVO_OUTPUT_RANGE);
 
     // left servo defaults to servo output 4
     SRV_Channels::set_aux_channel_default(SRV_Channel::k_tiltMotorLeft, CH_5);
     SRV_Channels::set_angle(SRV_Channel::k_tiltMotorLeft, SERVO_OUTPUT_RANGE); 
+
+    SRV_Channels::set_aux_channel_default(SRV_Channel::k_tiltMotorRear, CH_7);//扭转舵机
+    SRV_Channels::set_angle(SRV_Channel::k_tiltMotorRear, SERVO_OUTPUT_RANGE);//设置最大最小值
+    SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRear, 4500);//设置扭转舵机初始为最大值
+
 
     set_initialised_ok(expected_num_motors == num_motors);
 
@@ -192,9 +199,105 @@ void AP_MotorsMatrix::output_to_motors()
         }
     }
 
+}
+
+void AP_MotorsMatrix::quad_output_to_motors()//四旋翼模式
+{
+    gcs().send_text(MAV_SEVERITY_NOTICE, "Quad Mode output_to_motors");
+    int8_t i;
+
+    switch (_spool_state) {
+        case SpoolState::SHUT_DOWN: {
+            // no output
+            for (i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {
+                if (motor_enabled[i]) {
+                    _actuator[i] = 0.0f;
+                }
+            }
+            break;
+        }
+        case SpoolState::GROUND_IDLE:
+            // sends output to motors when armed but not flying
+            for (i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {
+                if (motor_enabled[i]) {
+                    set_actuator_with_slew(_actuator[i], actuator_spin_up_to_ground_idle());
+                }
+            }
+            break;
+        case SpoolState::SPOOLING_UP:
+        case SpoolState::THROTTLE_UNLIMITED:
+        case SpoolState::SPOOLING_DOWN:
+            // set motor output based on thrust requests
+            for (i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {
+                if (motor_enabled[i]) {
+                    set_actuator_with_slew(_actuator[i], thr_lin.thrust_to_actuator(_thrust_rpyt_out[i]));
+                }
+            }
+            break;
+    }
+
+    // convert output to PWM and send to each motor
+    for (i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {
+        if (motor_enabled[i]) {
+            rc_write(i, output_to_pwm(_actuator[i]));
+        }
+    }
+
     SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorLeft, _tilt_front*SERVO_OUTPUT_RANGE);    // 195-196行是加的四旋翼模式下控制舵机不要动的，不是原始代码
     SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRight, _tilt_back*SERVO_OUTPUT_RANGE);
     
+}
+
+void AP_MotorsMatrix::dual_output_to_motors()//双旋翼模式
+{
+    gcs().send_text(MAV_SEVERITY_NOTICE, "Dual Mode output_to_motors");
+    if (!initialised_ok()) {
+        return;
+    }
+
+    switch (_spool_state) {
+        case SpoolState::SHUT_DOWN:
+            _actuator[0] = 0.0f;
+            _actuator[1] = 0.0f;
+            _actuator[2] = 0.0f;
+
+            _actuator[3] = 0.0f;
+            _actuator[4] = 0.0f;
+            _external_min_throttle = 0.0;
+            break;
+        case SpoolState::GROUND_IDLE:
+            set_actuator_with_slew(_actuator[0], actuator_spin_up_to_ground_idle());
+            set_actuator_with_slew(_actuator[1], actuator_spin_up_to_ground_idle());
+            set_actuator_with_slew(_actuator[2], actuator_spin_up_to_ground_idle());
+            set_actuator_with_slew(_actuator[3], actuator_spin_up_to_ground_idle());
+            set_actuator_with_slew(_actuator[4], actuator_spin_up_to_ground_idle());
+            _external_min_throttle = 0.0;
+            break;
+        case SpoolState::SPOOLING_UP:
+        case SpoolState::THROTTLE_UNLIMITED:
+        case SpoolState::SPOOLING_DOWN:
+            set_actuator_with_slew(_actuator[0], thr_lin.thrust_to_actuator(_thrust_motor1));
+            set_actuator_with_slew(_actuator[1], thr_lin.thrust_to_actuator(_thrust_motor2));
+
+            set_actuator_with_slew(_actuator[2], thr_lin.thrust_to_actuator(_thrust_motor3));
+            set_actuator_with_slew(_actuator[3], thr_lin.thrust_to_actuator(_thrust_motor4));
+
+            set_actuator_with_slew(_actuator[4], thr_lin.thrust_to_actuator(_throttle));
+            break;
+    }
+
+    SRV_Channels::set_output_pwm(SRV_Channel::k_motor1, output_to_pwm(_actuator[0]));
+    SRV_Channels::set_output_pwm(SRV_Channel::k_motor2, output_to_pwm(_actuator[1]));
+
+    SRV_Channels::set_output_pwm(SRV_Channel::k_motor3, output_to_pwm(_actuator[2]));
+    SRV_Channels::set_output_pwm(SRV_Channel::k_motor4, output_to_pwm(_actuator[3]));
+
+    // use set scaled to allow a different PWM range on plane forward throttle, throttle range is 0 to 100
+    SRV_Channels::set_output_scaled(SRV_Channel::k_throttle, _actuator[4]*100);
+
+    SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorLeft, _tilt_front*SERVO_OUTPUT_RANGE);
+    SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRight, _tilt_back*SERVO_OUTPUT_RANGE);
+
 }
 
 // get_motor_mask - returns a bitmask of which outputs are being used for motors (1 means being used)
@@ -225,6 +328,7 @@ float AP_MotorsMatrix::boost_ratio(float boost_value, float normal_value) const
 
 // output_armed - sends commands to the motors
 // includes new scaling stability patch
+
 void AP_MotorsMatrix::output_armed_stabilizing()
 {
     // apply voltage and air pressure compensation
@@ -418,6 +522,280 @@ void AP_MotorsMatrix::output_armed_stabilizing()
 
     // check for failed motor
     check_for_failed_motor(throttle_thrust_best_plus_adj);
+}
+
+void AP_MotorsMatrix::quad_output_armed_stabilizing()//四旋翼模式
+{
+    gcs().send_text(MAV_SEVERITY_NOTICE, "Quad Mode output_armed_stabilizing");
+    // apply voltage and air pressure compensation
+    const float compensation_gain = thr_lin.get_compensation_gain(); // compensation for battery voltage and altitude
+
+    // pitch thrust input value, +/- 1.0
+    const float roll_thrust = (_roll_in + _roll_in_ff) * compensation_gain;
+
+    // pitch thrust input value, +/- 1.0
+    const float pitch_thrust = (_pitch_in + _pitch_in_ff) * compensation_gain;
+
+    // yaw thrust input value, +/- 1.0
+    float yaw_thrust = (_yaw_in + _yaw_in_ff) * compensation_gain;
+
+    // throttle thrust input value, 0.0 - 1.0
+    float throttle_thrust = get_throttle() * compensation_gain;
+
+    // throttle thrust average maximum value, 0.0 - 1.0
+    float throttle_avg_max = _throttle_avg_max * compensation_gain;
+
+    // throttle thrust maximum value, 0.0 - 1.0, If thrust boost is active then do not limit maximum thrust
+    const float throttle_thrust_max = boost_ratio(1.0, _throttle_thrust_max * compensation_gain);
+
+    // sanity check throttle is above zero and below current limited throttle
+    if (throttle_thrust <= 0.0f) {
+        throttle_thrust = 0.0f;
+        limit.throttle_lower = true;
+    }
+    if (throttle_thrust >= throttle_thrust_max) {
+        throttle_thrust = throttle_thrust_max;
+        limit.throttle_upper = true;
+    }
+
+    // ensure that throttle_avg_max is between the input throttle and the maximum throttle
+    throttle_avg_max = constrain_float(throttle_avg_max, throttle_thrust, throttle_thrust_max);
+
+    // throttle providing maximum roll, pitch and yaw range
+    // calculate the highest allowed average thrust that will provide maximum control range
+    float throttle_thrust_best_rpy = MIN(0.5f, throttle_avg_max);
+
+    float yaw_allowed = 1.0f; // amount of yaw we can fit in  加上下面一个if计算可用的偏航推力
+    for (uint8_t i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {
+        if (motor_enabled[i]) {
+            // calculate the thrust outputs for roll and pitch
+            _thrust_rpyt_out[i] = roll_thrust * _roll_factor[i] + pitch_thrust * _pitch_factor[i];
+
+            // Check the maximum yaw control that can be used on this channel
+            // Exclude any lost motors if thrust boost is enabled
+            if (!is_zero(_yaw_factor[i]) && (!_thrust_boost || i != _motor_lost_index)) {
+                const float thrust_rp_best_throttle = throttle_thrust_best_rpy + _thrust_rpyt_out[i];
+                float motor_room;
+                if (is_positive(yaw_thrust * _yaw_factor[i])) {
+                    // room to upper limit
+                    motor_room = 1.0 - thrust_rp_best_throttle;
+                } else {
+                    // room to lower limit
+                    motor_room = thrust_rp_best_throttle;
+                }
+                const float motor_yaw_allowed = MAX(motor_room, 0.0)/fabsf(_yaw_factor[i]);
+                yaw_allowed = MIN(yaw_allowed, motor_yaw_allowed);
+            }
+        }
+    }
+
+    // calculate the maximum yaw control that can be used
+    // todo: make _yaw_headroom 0 to 1
+    float yaw_allowed_min = (float)_yaw_headroom * 0.001f;
+
+    // increase yaw headroom to 50% if thrust boost enabled
+    yaw_allowed_min = boost_ratio(0.5, yaw_allowed_min);
+
+    // Let yaw access minimum amount of head room
+    yaw_allowed = MAX(yaw_allowed, yaw_allowed_min);
+
+    // Include the lost motor scaled by _thrust_boost_ratio to smoothly transition this motor in and out of the calculation
+    if (_thrust_boost && motor_enabled[_motor_lost_index]) {
+        // Check the maximum yaw control that can be used on this channel
+        // Exclude any lost motors if thrust boost is enabled
+        if (!is_zero(_yaw_factor[_motor_lost_index])){
+            const float thrust_rp_best_throttle = throttle_thrust_best_rpy + _thrust_rpyt_out[_motor_lost_index];
+            float motor_room;
+            if (is_positive(yaw_thrust * _yaw_factor[_motor_lost_index])) {
+                motor_room = 1.0 - thrust_rp_best_throttle;
+            } else {
+                motor_room = thrust_rp_best_throttle;
+            }
+            const float motor_yaw_allowed = MAX(motor_room, 0.0)/fabsf(_yaw_factor[_motor_lost_index]);
+            yaw_allowed = boost_ratio(yaw_allowed, MIN(yaw_allowed, motor_yaw_allowed));
+        }
+    }
+
+    if (fabsf(yaw_thrust) > yaw_allowed) {
+        // not all commanded yaw can be used
+        yaw_thrust = constrain_float(yaw_thrust, -yaw_allowed, yaw_allowed);
+        limit.yaw = true;
+    }
+
+    // add yaw control to thrust outputs
+    float rpy_low = 1.0f;   // lowest thrust value
+    float rpy_high = -1.0f; // highest thrust value
+    for (uint8_t i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {   //计算和调整推力输出
+        if (motor_enabled[i]) {
+            _thrust_rpyt_out[i] = _thrust_rpyt_out[i] + yaw_thrust * _yaw_factor[i];
+
+            // record lowest roll + pitch + yaw command
+            if (_thrust_rpyt_out[i] < rpy_low) {
+                rpy_low = _thrust_rpyt_out[i];
+            }
+            // record highest roll + pitch + yaw command
+            // Exclude any lost motors if thrust boost is enabled
+            if (_thrust_rpyt_out[i] > rpy_high && (!_thrust_boost || i != _motor_lost_index)) {
+                rpy_high = _thrust_rpyt_out[i];
+            }
+        }
+    }
+    // Include the lost motor scaled by _thrust_boost_ratio to smoothly transition this motor in and out of the calculation
+    if (_thrust_boost) {
+        // record highest roll + pitch + yaw command
+        if (_thrust_rpyt_out[_motor_lost_index] > rpy_high && motor_enabled[_motor_lost_index]) {
+            rpy_high = boost_ratio(rpy_high, _thrust_rpyt_out[_motor_lost_index]);
+        }
+    }
+
+    // calculate any scaling needed to make the combined thrust outputs fit within the output range
+    float rpy_scale = 1.0f;
+    if (rpy_high - rpy_low > 1.0f) {
+        rpy_scale = 1.0f / (rpy_high - rpy_low);
+    }
+    if (throttle_avg_max + rpy_low < 0) {
+        rpy_scale = MIN(rpy_scale, -throttle_avg_max / rpy_low);
+    }
+
+    // calculate how close the motors can come to the desired throttle
+    rpy_high *= rpy_scale;
+    rpy_low *= rpy_scale;
+    throttle_thrust_best_rpy = -rpy_low;
+    float thr_adj = throttle_thrust - throttle_thrust_best_rpy;
+    if (rpy_scale < 1.0f) {
+        // Full range is being used by roll, pitch, and yaw.
+        limit.roll = true;
+        limit.pitch = true;
+        limit.yaw = true;
+        if (thr_adj > 0.0f) {
+            limit.throttle_upper = true;
+        }
+        thr_adj = 0.0f;
+    } else if (thr_adj < 0.0f) {
+        // Throttle can't be reduced to desired value
+        // todo: add lower limit flag and ensure it is handled correctly in altitude controller
+        thr_adj = 0.0f;
+    } else if (thr_adj > 1.0f - (throttle_thrust_best_rpy + rpy_high)) {
+        // Throttle can't be increased to desired value
+        thr_adj = 1.0f - (throttle_thrust_best_rpy + rpy_high);
+        limit.throttle_upper = true;
+    }
+
+    // add scaled roll, pitch, constrained yaw and throttle for each motor
+    const float throttle_thrust_best_plus_adj = throttle_thrust_best_rpy + thr_adj;
+    for (uint8_t i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {
+        if (motor_enabled[i]) {
+            _thrust_rpyt_out[i] = (throttle_thrust_best_plus_adj * _throttle_factor[i]) + (rpy_scale * _thrust_rpyt_out[i]);
+        }
+    }
+
+    // determine throttle thrust for harmonic notch
+    // compensation_gain can never be zero
+    _throttle_out = throttle_thrust_best_plus_adj / compensation_gain;
+
+    // check for failed motor
+    check_for_failed_motor(throttle_thrust_best_plus_adj);
+}
+
+// calculate outputs to the motors
+void AP_MotorsMatrix::dual_output_armed_stabilizing()//双旋翼模式
+{
+    gcs().send_text(MAV_SEVERITY_NOTICE, "Dual Mode output_armed_stabilizing");
+    float   roll_thrust;                // roll thrust input value, +/- 1.0
+    float   pitch_thrust;               // pitch thrust input value, +/- 1.0
+    float   yaw_thrust;                 // yaw thrust input value, +/- 1.0
+    float   throttle_thrust;            // throttle thrust input value, 0.0 - 1.0
+    float   thrust_max;                 // highest motor value
+    float   thrust_min;                 // lowest motor value
+    float   thrust_maxf;                 // highest motor value
+    float   thrust_minf;                 // lowest motor value
+    float   thrust_maxb;                 // highest motor value
+    float   thrust_minb;                 // lowest motor value
+    float   thr_adj = 0.0f;             // the difference between the pilot's desired throttle and throttle_thrust_best_rpy
+
+    // apply voltage and air pressure compensation
+    const float compensation_gain = thr_lin.get_compensation_gain();
+    roll_thrust = (_roll_in + _roll_in_ff) * compensation_gain;
+    pitch_thrust = _pitch_in + _pitch_in_ff;
+    yaw_thrust = _yaw_in + _yaw_in_ff;
+    throttle_thrust = get_throttle() * compensation_gain;
+    const float max_boost_throttle = _throttle_avg_max * compensation_gain;
+
+    // never boost above max, derived from throttle mix params
+    const float min_throttle_out = MIN(_external_min_throttle, max_boost_throttle);
+    const float max_throttle_out = _throttle_thrust_max * compensation_gain;
+
+    // sanity check throttle is above min and below current limited throttle
+    if (throttle_thrust <= min_throttle_out) {
+        throttle_thrust = min_throttle_out;
+        limit.throttle_lower = true;
+    }
+    if (throttle_thrust >= max_throttle_out) {
+        throttle_thrust = max_throttle_out;
+        limit.throttle_upper = true;
+    }
+
+    if (roll_thrust >= 1.0) {
+        // cannot split motor outputs by more than 1
+        roll_thrust = 1;
+        limit.roll = true;
+    }
+
+    // calculate left and right throttle outputs
+    _thrust_front = throttle_thrust + pitch_thrust * 0.5f;
+    _thrust_back  = throttle_thrust - pitch_thrust * 0.5f;
+
+    _thrust_motor1=_thrust_front* 0.5f;
+    _thrust_motor3=_thrust_front* 0.5f;
+    _thrust_motor2=_thrust_back * 0.5f;
+    _thrust_motor4=_thrust_back * 0.5f;
+
+    thrust_maxf = MAX(_thrust_motor1,_thrust_motor3);
+    thrust_minf = MIN(_thrust_motor1,_thrust_motor3);
+    thrust_maxb = MAX(_thrust_motor2,_thrust_motor4);
+    thrust_minb = MIN(_thrust_motor2,_thrust_motor4);
+    thrust_max  = MAX(thrust_maxf,thrust_maxb);
+    thrust_min  = MIN(thrust_minf,thrust_minb);
+
+
+    if (thrust_max > 1.0f) {
+        // if max thrust is more than one reduce average throttle
+        thr_adj = 1.0f - thrust_max;
+        limit.throttle_upper = true;
+    } else if (thrust_min < 0.0) {
+        // if min thrust is less than 0 increase average throttle
+        // but never above max boost
+        thr_adj = -thrust_min;
+        if ((throttle_thrust + thr_adj) > max_boost_throttle) {
+            thr_adj = MAX(max_boost_throttle - throttle_thrust, 0.0);
+            // in this case we throw away some roll output, it will be uneven
+            // constraining the lower motor more than the upper
+            // this unbalances torque, but motor torque should have significantly less control power than tilts / control surfaces
+            // so its worth keeping the higher roll control power at a minor cost to yaw
+            limit.roll = true;
+        }
+        limit.throttle_lower = true;
+    }
+
+    // Add adjustment to reduce average throttle
+    _thrust_motor1 = constrain_float(_thrust_motor1 + thr_adj, 0.0f, 1.0f);
+    _thrust_motor2 = constrain_float(_thrust_motor2 + thr_adj, 0.0f, 1.0f);
+    _thrust_motor3 = constrain_float(_thrust_motor3 + thr_adj, 0.0f, 1.0f);
+    _thrust_motor4 = constrain_float(_thrust_motor4 + thr_adj, 0.0f, 1.0f);
+
+    _throttle = throttle_thrust;
+
+    // compensation_gain can never be zero
+    // ensure accurate representation of average throttle output, this value is used for notch tracking and control surface scaling
+    if (_has_diff_thrust) {
+        _throttle_out = (throttle_thrust + thr_adj) / compensation_gain;
+    } else {
+        _throttle_out = throttle_thrust / compensation_gain;
+    }
+
+    // thrust vectoring
+    _tilt_front = -roll_thrust - yaw_thrust;//257-258测试一下纵列式能不能成功，最终偏航靠差速实现，不靠舵机
+    _tilt_back  = -roll_thrust + yaw_thrust;
 }
 
 // check for failed motor

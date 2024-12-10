@@ -287,7 +287,7 @@ bool RC_Channel::update(void)
     if (has_override() && !rc().option_is_enabled(RC_Channels::Option::IGNORE_OVERRIDES)) {
         radio_in = override_value;
     } else if (rc().has_had_rc_receiver() && !rc().option_is_enabled(RC_Channels::Option::IGNORE_RECEIVER)) {
-        radio_in = hal.rcin->read(ch_in);
+        radio_in = hal.rcin->read(ch_in);//读取通道值
     } else {
         return false;
     }
@@ -551,7 +551,7 @@ void RC_Channel::reset_mode_switch()
 }
 
 // read a 6 position switch
-bool RC_Channel::read_6pos_switch(int8_t& position)
+bool RC_Channel::read_6pos_switch(int8_t& position)//读取开关位置
 {
     // calculate position of 6 pos switch
     const uint16_t pulsewidth = get_radio_in();

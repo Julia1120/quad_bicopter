@@ -62,6 +62,12 @@ void AP_MotorsSingle::set_update_rate(uint16_t speed_hz)
     rc_set_freq(mask, _speed_hz);
 }
 
+
+void AP_MotorsSingle::quad_output_to_motors()
+{}
+void AP_MotorsSingle::dual_output_to_motors()
+{}
+
 void AP_MotorsSingle::output_to_motors()
 {
     if (!initialised_ok()) {
@@ -119,6 +125,12 @@ uint32_t AP_MotorsSingle::get_motor_mask()
 }
 
 // sends commands to the motors
+
+void AP_MotorsSingle::quad_output_armed_stabilizing()
+{}
+void AP_MotorsSingle::dual_output_armed_stabilizing()
+{}
+
 void AP_MotorsSingle::output_armed_stabilizing()
 {
     float   roll_thrust;                // roll thrust input value, +/- 1.0

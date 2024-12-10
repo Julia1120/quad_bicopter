@@ -104,6 +104,8 @@ public:
     // returns a formatted string into buffer, e.g. "QUAD/X"
     void get_frame_and_type_string(char *buffer, uint8_t buflen) const;
 
+    
+
     // Constructor
     AP_Motors(uint16_t speed_hz = AP_MOTORS_SPEED_DEFAULT);
 
@@ -289,6 +291,11 @@ public:
 protected:
     // output functions that should be overloaded by child classes
     virtual void        output_armed_stabilizing() = 0;
+    virtual void        quad_output_armed_stabilizing() = 0;;//四旋翼模式稳定
+    virtual void        dual_output_armed_stabilizing() = 0;;//双旋翼模式稳定
+
+    
+
     virtual void        rc_write_angle(uint8_t chan, int16_t angle_cd);
     virtual void        rc_set_freq(uint32_t mask, uint16_t freq_hz);
 

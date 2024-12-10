@@ -85,6 +85,11 @@ void AP_MotorsTri::set_update_rate(uint16_t speed_hz)
     rc_set_freq(mask, _speed_hz);
 }
 
+void AP_MotorsTri::quad_output_to_motors()
+{}
+void AP_MotorsTri::dual_output_to_motors()
+{}
+
 void AP_MotorsTri::output_to_motors()
 {
     switch (_spool_state) {
@@ -138,6 +143,12 @@ uint32_t AP_MotorsTri::get_motor_mask()
 
 // output_armed - sends commands to the motors
 // includes new scaling stability patch
+
+void AP_MotorsTri::quad_output_armed_stabilizing()
+{}
+void AP_MotorsTri::dual_output_armed_stabilizing()
+{}
+
 void AP_MotorsTri::output_armed_stabilizing()
 {
     float   roll_thrust;                // roll thrust input value, +/- 1.0

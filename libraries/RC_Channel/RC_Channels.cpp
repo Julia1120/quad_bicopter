@@ -190,7 +190,7 @@ void RC_Channels::init_aux_all()
 }
 
 //
-// Support for mode switches
+// Support for mode switches模式选择相关
 //
 RC_Channel *RC_Channels::flight_mode_channel() const
 {

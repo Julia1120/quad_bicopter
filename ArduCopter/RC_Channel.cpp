@@ -14,7 +14,7 @@ int8_t RC_Channels_Copter::flight_mode_channel_number() const
     return copter.g.flight_mode_chan.get();
 }
 
-void RC_Channel_Copter::mode_switch_changed(modeswitch_pos_t new_pos)
+void RC_Channel_Copter::mode_switch_changed(modeswitch_pos_t new_pos)//切换模式
 {
     if (new_pos < 0 || (uint8_t)new_pos > copter.num_flight_modes) {
         // should not have been called

@@ -81,6 +81,12 @@ void AP_MotorsTailsitter::set_update_rate(uint16_t speed_hz)
     SRV_Channels::set_rc_frequency(SRV_Channel::k_motor4, speed_hz);
 }
 
+
+void AP_MotorsTailsitter::quad_output_to_motors()
+{}
+void AP_MotorsTailsitter::dual_output_to_motors()
+{}
+
 void AP_MotorsTailsitter::output_to_motors()
 {
     if (!initialised_ok()) {
@@ -159,6 +165,12 @@ uint32_t AP_MotorsTailsitter::get_motor_mask()
 }
 
 // calculate outputs to the motors
+
+void AP_MotorsTailsitter::quad_output_armed_stabilizing()
+{}
+void AP_MotorsTailsitter::dual_output_armed_stabilizing()
+{}
+
 void AP_MotorsTailsitter::output_armed_stabilizing()
 {
     float   roll_thrust;                // roll thrust input value, +/- 1.0

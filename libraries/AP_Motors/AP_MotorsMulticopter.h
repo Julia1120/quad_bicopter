@@ -89,6 +89,8 @@ public:
     // convert values to PWM min and max if not configured
     void                convert_pwm_min_max_param(int16_t radio_min, int16_t radio_max);
 
+    
+
 #if HAL_LOGGING_ENABLED
     // 10hz logging of voltage scaling and max trust
     void                Log_Write() override;
@@ -114,6 +116,9 @@ protected:
 
     // output_to_motors - sends commands to the motors
     virtual void        output_to_motors() = 0;
+    virtual void        quad_output_to_motors() = 0;//四旋翼模式输出
+    virtual void        dual_output_to_motors() = 0;//双旋翼模式输出
+
 
     // update the throttle input filter
     virtual void        update_throttle_filter() override;

@@ -18,6 +18,9 @@
 #include <AP_BattMonitor/AP_BattMonitor.h>
 #include <SRV_Channel/SRV_Channel.h>
 #include <AP_Logger/AP_Logger.h>
+#include <RC_Channel/RC_Channel.h>
+
+#include <GCS_MAVLink/GCS.h>
 
 #include <AP_Vehicle/AP_Vehicle_Type.h>
 #if APM_BUILD_TYPE(APM_BUILD_ArduPlane)
@@ -254,14 +257,55 @@ void AP_MotorsMulticopter::output()
     // run spool logic
     output_logic();
 
-    // calculate thrust
-    output_armed_stabilizing();
+    // calculate thrust初始版本，先注释掉
+    //output_armed_stabilizing();
+
+    //根据通道值不同确定不同的动力分配
+    //int switch_pos=hal.rcin->read(6);//读取6通道开关位置信息
+    uint16_t rc6_in=rc().channel(CH_6)->get_radio_in();//读取6通道开关位置信息
+    float f_rc6_in=float(rc6_in);
+    float rc6_in_tra=-(f_rc6_in-1500)/400;
+    if((rc6_in<=1100))//四旋翼模式
+    {
+        SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRear, 4500);//扭转舵机
+        quad_output_armed_stabilizing();
+        
+    }
+    else if((rc6_in>=1900))//双旋翼模式
+    {
+        SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRear, -4500);//扭转舵机
+        dual_output_armed_stabilizing();
+
+    }
+    else if(rc6_in<1900&&rc6_in>1100)
+    {
+        SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRear, rc6_in_tra*4500);//扭转舵机
+        output_armed_stabilizing();
+    }
 
     // apply any thrust compensation for the frame
     thrust_compensation();
 
-    // convert rpy_thrust values to pwm
-    output_to_motors();
+    // convert rpy_thrust values to pwm初始版本，先注释掉
+    //output_to_motors();
+
+    if((rc6_in<=1200))//四旋翼模式
+    {
+        SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRear, 4500);//扭转舵机
+        quad_output_to_motors();
+        
+    }
+    else if((rc6_in>=1900))//双旋翼模式
+    {
+        SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRear, -4500);//扭转舵机
+        dual_output_to_motors();
+
+    }
+    else if(rc6_in<1900&&rc6_in>1100)
+    {
+        SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRear, rc6_in_tra*4500);//扭转舵机
+        output_to_motors();
+    }
 
     // output any booster throttle
     output_boost_throttle();

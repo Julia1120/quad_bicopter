@@ -42,7 +42,7 @@ bool AP_MotorsMatrix_Scripting_Dynamic::add_motor(uint8_t motor_num, uint8_t tes
     return false;
 }
 
-void AP_MotorsMatrix_Scripting_Dynamic::load_factors(const factor_table &new_table)
+void AP_MotorsMatrix_Scripting_Dynamic::load_factors(const factor_table &new_table)//方法用于加载新的因子表，动态调整飞行器的电机控制因子（如滚转、俯仰、偏航和油门）。加载的因子会存储在_roll_factor、_pitch_factor、_yaw_factor 和 _throttle_factor 中
 {
     WITH_SEMAPHORE(_sem);
     had_table = true;
