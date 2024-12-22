@@ -745,10 +745,10 @@ void AP_MotorsMatrix::dual_output_armed_stabilizing()//双旋翼模式
     _thrust_front = throttle_thrust + pitch_thrust * 0.5f;
     _thrust_back  = throttle_thrust - pitch_thrust * 0.5f;
 
-    _thrust_motor1=_thrust_front* 0.5f;
-    _thrust_motor3=_thrust_front* 0.5f;
-    _thrust_motor2=_thrust_back * 0.5f;
-    _thrust_motor4=_thrust_back * 0.5f;
+    _thrust_motor1=_thrust_front* 0.7f;
+    _thrust_motor3=_thrust_front* 0.7f;
+    _thrust_motor2=_thrust_back * 0.7f;
+    _thrust_motor4=_thrust_back * 0.7f;
 
     thrust_maxf = MAX(_thrust_motor1,_thrust_motor3);
     thrust_minf = MIN(_thrust_motor1,_thrust_motor3);
@@ -922,16 +922,40 @@ void AP_MotorsMatrix::add_motor_raw(int8_t motor_num, float roll_fac, float pitc
 // add_motor using just position and prop direction - assumes that for each motor, roll and pitch factors are equal
 void AP_MotorsMatrix::add_motor(int8_t motor_num, float angle_degrees, float yaw_factor, uint8_t testing_order)
 {
+    uint16_t rc6_in=rc().channel(CH_6)->get_radio_in();//读取6通道开关位置信息
+    //可以改这个地方num为1、2的电机读取舵机角度，3、4电机正常读取
+    if(rc6_in<1900&&rc6_in>1100)
+    {
+        arm_angle_degrees=get_arm_angle_degrees();
+        motor1_angle_degrees=arm_angle_degrees;
+        motor2_angle_degrees=arm_angle_degrees-180;
+        switch ((motor_num))
+        {
+            case 1:
+            {
+            angle_degrees=motor1_angle_degrees;
+            break;
+            }
+            case 2:
+            {
+                angle_degrees=motor2_angle_degrees;
+                break;
+            }
+            default:
+                break;
+        }
+    }
+    
     add_motor(motor_num, angle_degrees, angle_degrees, yaw_factor, testing_order);
 }
 
 // add_motor using position and prop direction. Roll and Pitch factors can differ (for asymmetrical frames)
-void AP_MotorsMatrix::add_motor(int8_t motor_num, float roll_factor_in_degrees, float pitch_factor_in_degrees, float yaw_factor, uint8_t testing_order)
+void AP_MotorsMatrix::add_motor(int8_t motor_num, float roll_factor_in_degrees, float pitch_factor_in_degrees, float yaw_factor, uint8_t testing_order)//roll,pitch是一样的，都是安装角
 {
     add_motor_raw(
         motor_num,
-        cosf(radians(roll_factor_in_degrees + 90)),
-        cosf(radians(pitch_factor_in_degrees)),
+        cosf(radians(roll_factor_in_degrees + 90)),//radians换成弧度，这就是sin（安装角）
+        cosf(radians(pitch_factor_in_degrees)),//cos（安装角）
         yaw_factor,
         testing_order);
 }
@@ -950,10 +974,89 @@ void AP_MotorsMatrix::remove_motor(int8_t motor_num)
     }
 }
 
+float AP_MotorsMatrix::equation_degrees(float mid_degrees_1, float servo_angle_degrees_1) //二分法里的方程函数
+{
+    
+    servo_angle_inivalue_rad=radians(0.05);//四旋翼模式下舵机臂与水平（90-舵机臂与固定机臂夹角）夹角，弧度
+    //转换为弧度
+    mid_rad = radians(mid_degrees_1);
+    servo_angle_rad = radians(servo_angle_degrees_1);
+
+    re=l*l - l_servo*l_servo - 2*d*d - 2*d*d*cosf(mid_rad) - 2*d*l_servo*(servo_angle_rad+servo_angle_inivalue_rad) - 2*d*l_servo*(servo_angle_rad+servo_angle_inivalue_rad-mid_rad);
+
+    return re;
+}
+
+float AP_MotorsMatrix::cal_arm_angle_degrees(float servo_angle_degrees_1, float lower_arm_angle_degrees_1, float upper_arm_angle_degrees_1)//用二分法计算移动机臂与固定机臂夹角
+{
+    
+    f_lower = equation_degrees(lower_arm_angle_degrees_1, servo_angle_degrees_1);
+    f_upper = equation_degrees(upper_arm_angle_degrees_1, servo_angle_degrees_1);
+
+    if (f_lower * f_upper > 0) {
+        return NAN;
+    }
+
+    while ((upper_arm_angle_degrees_1 - lower_arm_angle_degrees_1) > tol) 
+    {
+        mid_degrees = (lower_arm_angle_degrees_1 + upper_arm_angle_degrees_1) / 2.0;
+        f_mid = equation_degrees(mid_degrees, servo_angle_degrees_1);
+
+        if((f_mid<0))
+        {
+            float m=-f_mid;
+            f_mid=m;
+        }
+        if ((f_mid < tol)) 
+        {
+            return mid_degrees; // 找到根
+        }
+
+        if (f_lower * f_mid < 0)
+        {
+            upper_arm_angle_degrees_1 = mid_degrees; // 根在左半区间
+            f_upper = f_mid;
+        } 
+        else
+        {
+            lower_arm_angle_degrees_1 = mid_degrees; // 根在右半区间
+            f_lower = f_mid;
+        }
+    }
+
+    return (lower_arm_angle_degrees_1 + upper_arm_angle_degrees_1) / 2.0; // 返回最终的中点
+}
+
+float AP_MotorsMatrix::get_arm_angle_degrees()//将舵机角度换算成机臂角度
+{
+    uint16_t rc6_in=rc().channel(CH_6)->get_radio_in();//读取6通道开关位置信息
+    /*if((rc6_in<=1100))//四旋翼模式
+    {
+        arm_angle_degrees_1=90.0;
+    }
+    else if((rc6_in>=1900))//双旋翼模式
+    {
+        arm_angle_degrees_1=0.0;
+    }
+    if(rc6_in<1900&&rc6_in>1100)
+    {*/
+        f_rc6_in=float(rc6_in);//将6通道信号值转为浮点数
+        servo_pwm_value=-1.0275*f_rc6_in+2967.25;//求6通道每个信号值对应的输出到舵机的pwm值
+        servo_angle_degrees=((servo_pwm_value-1015)/822)*73.68+16.27;//根据舵机的pwm值计算舵机旋转角度
+        
+        arm_angle_degrees_1 = cal_arm_angle_degrees(servo_angle_degrees, lower_arm_angle_degrees, upper_arm_angle_degrees);//计算移动机臂与固定机臂夹角
+        
+    //}
+    return arm_angle_degrees_1;
+    
+}
+
 void AP_MotorsMatrix::add_motors(const struct MotorDef *motors, uint8_t num_motors)
 {
+    
     for (uint8_t i=0; i<num_motors; i++) {
         const auto &motor = motors[i];
+        //可以改这个地方i为1、2的电机读取舵机角度，3、4电机正常读取
         add_motor(i, motor.angle_degrees, motor.yaw_factor, motor.testing_order);
     }
 }

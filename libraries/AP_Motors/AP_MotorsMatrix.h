@@ -91,6 +91,34 @@ public:
     // method to add many motors specified in a structure:
     void add_motors(const struct MotorDef *motors, uint8_t num_motors);
 
+    float equation_degrees(float mid, float servo_angle);//二分法里的方程函数
+    float get_arm_angle_degrees();//将舵机角度换算成机臂角度
+    float cal_arm_angle_degrees(float servo_angle, float lower_arm_angle, float upper_arm_angle);//二分法计算移动机臂与固定机臂夹角
+    float arm_angle_degrees;//机臂转动角度
+    float motor1_angle_degrees;//1号电机所在角度
+    float motor2_angle_degrees;//2号电机所在角度
+    float re;//计算后的返回值
+    float l_servo=28.0;//舵机臂长度
+    float l=47.3497624;//棍儿的长度
+    float d=19.091883;//扭转盘到中心以及舵机转轴到中心的距离
+    float servo_angle_inivalue_rad;//四旋翼模式下舵机臂与水平（90-舵机臂与固定机臂夹角）夹角，弧度
+    //转换为弧度
+    float mid_rad;
+    float servo_angle_rad;
+    //以下是二分法用到的参数
+    float mid_degrees = 0.0;
+    float tol=1e-6;//控制结果精度
+    float f_lower;
+    float f_upper;
+    float f_mid;
+    //二分法结束
+    float f_rc6_in;//6通道信号值的浮点数形式
+    float servo_pwm_value;//舵机接收的信号值
+    float servo_angle_degrees;//舵机旋转角度
+    float arm_angle_degrees_1=90.0;//机臂旋转角度
+    float lower_arm_angle_degrees = 0.0;//移动机臂最小夹角
+    float upper_arm_angle_degrees = 90.0;//移动机臂最大夹角
+
     // structure used for initialising motors that add have separate
     // roll/pitch/yaw factors.  Note that this does *not* include
     // the final parameter for the add_motor_raw call - throttle

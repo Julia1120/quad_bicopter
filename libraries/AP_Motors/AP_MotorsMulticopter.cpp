@@ -289,7 +289,7 @@ void AP_MotorsMulticopter::output()
     // convert rpy_thrust values to pwm初始版本，先注释掉
     //output_to_motors();
 
-    if((rc6_in<=1200))//四旋翼模式
+    if((rc6_in<=1100))//四旋翼模式
     {
         SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRear, 4500);//扭转舵机
         quad_output_to_motors();
