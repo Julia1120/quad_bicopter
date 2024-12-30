@@ -245,6 +245,29 @@ AP_MotorsMulticopter::AP_MotorsMulticopter(uint16_t speed_hz) :
     AP_Param::setup_object_defaults(this, var_info);
 };
 
+/*uint16_t rc8_in=rc().channel(CH_8)->get_radio_in();//读取8通道开关位置信息
+int16_t AP_MotorsMulticopter::rcarmin_output()//根据8通道pwm值决定转动机臂命令是由旋钮发出还是拨杆发出
+{
+    if((rc8_in<=1100))//旋钮控制机臂旋转
+    {
+        rcarm_in_read=rc().channel(CH_6)->get_radio_in();//读取6通道开关位置信息
+        rcarm_in_output=rcarm_in_read;
+    }
+    else if((rc8_in>=1900))//拨杆控制机臂旋转
+    {
+        rcarm_in_read=rc().channel(CH_9)->get_radio_in();//读取6通道开关位置信息
+        rcarm_in_output=rcarm_in_read;
+    }
+
+    return rcarm_in_output;
+}
+float AP_MotorsMulticopter::cal_rcarm_in_tra()
+{
+    uint16_t rcarm_in=rcarmin_output();//获取旋转机臂通道pwm值
+    float f_rcarm_in_output=float(rcarm_in);//将旋转机臂通道pwm值转为浮点数
+    float rcarm_in_tra=-(f_rcarm_in_output-1500)/400;
+    return rcarm_in_tra;
+}*/
 // output - sends commands to the motors
 void AP_MotorsMulticopter::output()
 {
@@ -261,25 +284,29 @@ void AP_MotorsMulticopter::output()
     //output_armed_stabilizing();
 
     //根据通道值不同确定不同的动力分配
-    //int switch_pos=hal.rcin->read(6);//读取6通道开关位置信息
-    uint16_t rc6_in=rc().channel(CH_6)->get_radio_in();//读取6通道开关位置信息
-    float f_rc6_in=float(rc6_in);
-    float rc6_in_tra=-(f_rc6_in-1500)/400;
-    if((rc6_in<=1100))//四旋翼模式
+    //int switch_pos=hal.rcin->read(6);//读取移动机臂通道开关位置信息
+    uint16_t rcarm_in=rc().channel(CH_6)->get_radio_in();//读取6通道开关位置信息
+    float f_rcarm_in=float(rcarm_in);//将旋转机臂通道pwm值转为浮点数
+    float rcarm_in_tra=-(f_rcarm_in-1500)/400;
+
+    //uint16_t rcarm_in=rcarmin_output();//读取移动机臂通道开关位置信息
+    
+    //float rc6_in_tra=cal_rcarm_in_tra();
+    if((rcarm_in<=1100))//四旋翼模式
     {
         SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRear, 4500);//扭转舵机
         quad_output_armed_stabilizing();
         
     }
-    else if((rc6_in>=1900))//双旋翼模式
+    else if((rcarm_in>=1900))//双旋翼模式
     {
         SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRear, -4500);//扭转舵机
         dual_output_armed_stabilizing();
 
     }
-    else if(rc6_in<1900&&rc6_in>1100)
+    else if(rcarm_in<1900&&rcarm_in>1100)
     {
-        SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRear, rc6_in_tra*4500);//扭转舵机
+        SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRear, rcarm_in_tra*4500);//扭转舵机
         output_armed_stabilizing();
     }
 
@@ -289,21 +316,21 @@ void AP_MotorsMulticopter::output()
     // convert rpy_thrust values to pwm初始版本，先注释掉
     //output_to_motors();
 
-    if((rc6_in<=1100))//四旋翼模式
+    if((rcarm_in<=1100))//四旋翼模式
     {
         SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRear, 4500);//扭转舵机
         quad_output_to_motors();
         
     }
-    else if((rc6_in>=1900))//双旋翼模式
+    else if((rcarm_in>=1900))//双旋翼模式
     {
         SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRear, -4500);//扭转舵机
         dual_output_to_motors();
 
     }
-    else if(rc6_in<1900&&rc6_in>1100)
+    else if(rcarm_in<1900&&rcarm_in>1100)
     {
-        SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRear, rc6_in_tra*4500);//扭转舵机
+        SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRear, rcarm_in_tra*4500);//扭转舵机
         output_to_motors();
     }
 

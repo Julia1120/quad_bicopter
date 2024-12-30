@@ -68,6 +68,8 @@ public:
     // return number of motor that has failed.  Should only be called if get_thrust_boost() returns true
     uint8_t             get_lost_motor() const override { return _motor_lost_index; }
 
+    //int16_t             rcarmin_output();//根据8通道pwm值决定转动机臂命令是由旋钮发出还是拨杆发出
+
     // return the roll factor of any motor, this is used for tilt rotors and tail sitters
     // using copter motors for forward flight
     float               get_roll_factor(uint8_t i) override { return _roll_factor[i]; }
@@ -94,7 +96,7 @@ public:
     float equation_degrees(float mid, float servo_angle);//二分法里的方程函数
     float get_arm_angle_degrees();//将舵机角度换算成机臂角度
     float cal_arm_angle_degrees(float servo_angle, float lower_arm_angle, float upper_arm_angle);//二分法计算移动机臂与固定机臂夹角
-    float arm_angle_degrees;//机臂转动角度
+    float arm_angle_degrees;//两机臂夹角
     float motor1_angle_degrees;//1号电机所在角度
     float motor2_angle_degrees;//2号电机所在角度
     float re;//计算后的返回值
@@ -112,7 +114,7 @@ public:
     float f_upper;
     float f_mid;
     //二分法结束
-    float f_rc6_in;//6通道信号值的浮点数形式
+    float f_rcarm_in;//6通道信号值的浮点数形式
     float servo_pwm_value;//舵机接收的信号值
     float servo_angle_degrees;//舵机旋转角度
     float arm_angle_degrees_1=90.0;//机臂旋转角度
@@ -177,6 +179,9 @@ protected:
     float               _throttle_factor[AP_MOTORS_MAX_NUM_MOTORS];  // each motors contribution to throttle 0~1
     float               _thrust_rpyt_out[AP_MOTORS_MAX_NUM_MOTORS]; // combined roll, pitch, yaw and throttle outputs to motors in 0~1 range
     uint8_t             _test_order[AP_MOTORS_MAX_NUM_MOTORS];  // order of the motors in the test sequence
+
+    float               _roll_servo_factor;//过渡模式下的舵机滚转影响因子
+    float               pitch_factor_tran;//过渡模式下的动态俯仰影响因子
 
     // motor failure handling
     float               _thrust_rpyt_out_filt[AP_MOTORS_MAX_NUM_MOTORS];    // filtered thrust outputs with 1 second time constant

@@ -33,6 +33,8 @@ public:
 
     // output - sends commands to the motors
     virtual void        output() override;
+    int16_t             rcarmin_output();//根据8通道pwm值决定转动机臂命令是由旋钮发出还是拨杆发出
+    float               cal_rcarm_in_tra();
 
     // output_min - sends minimum values out to the motors
     void                output_min() override;
@@ -69,6 +71,10 @@ public:
     // get minimum or maximum pwm value that can be output to motors
     int16_t             get_pwm_output_min() const { return _pwm_min; }
     int16_t             get_pwm_output_max() const { return _pwm_max; }
+    
+    uint16_t            rcarm_in_read;//旋钮控制机臂旋转通道pwm值6通道
+    uint16_t            rcarm_in_calculate;//拨杆切换时计算得到控制机臂旋转通道pwm值9通道
+    uint16_t            rcarm_in_output;//用于下一步计算的控制机臂旋转通道pwm值
     
     // parameter check for MOT_PWM_MIN/MAX, returns true if parameters are valid
     bool check_mot_pwm_params() const;
