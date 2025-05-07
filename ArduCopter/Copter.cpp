@@ -149,6 +149,9 @@ const AP_Scheduler::Task Copter::scheduler_tasks[] = {
 
     SCHED_TASK(rc_loop,              250,    130,  3),
     SCHED_TASK(throttle_loop,         50,     75,  6),
+
+    SCHED_TASK(get_upservo_value,    250,    130,  43),//获取矢量电机倾转角
+
 #if AP_FENCE_ENABLED
     SCHED_TASK(fence_check,           25,    100,  7),
 #endif
@@ -215,6 +218,7 @@ const AP_Scheduler::Task Copter::scheduler_tasks[] = {
     SCHED_TASK_CLASS(AP_Camera,            &copter.camera,              update,          50,  75, 111),
 #endif
 #if HAL_LOGGING_ENABLED
+    SCHED_TASK(one_hundred_hz_logging_loop,  100,    350, 114),//读取遥控器各通道数据，采样频率：100Hz
     SCHED_TASK(ten_hz_logging_loop,   10,    350, 114),
     SCHED_TASK(twentyfive_hz_logging, 25,    110, 117),
     SCHED_TASK_CLASS(AP_Logger,            &copter.logger,              periodic_tasks, 400, 300, 120),
@@ -504,6 +508,13 @@ void Copter::throttle_loop()
     update_ekf_terrain_height_stable();
 }
 
+void Copter::get_upservo_value()//获取矢量电机倾转角
+{
+    float servo_value=motors->_tilt_front;
+    //gcs().send_text(MAV_SEVERITY_NOTICE, "传递%f",motors->_tilt_front);
+    attitude_control->upservo_value=servo_value;
+}
+
 // update_batt_compass - read battery and compass
 // should be called at 10hz
 void Copter::update_batt_compass(void)
@@ -536,6 +547,17 @@ void Copter::loop_rate_logging()
     }
 }
 
+
+void Copter::one_hundred_hz_logging_loop()//读取遥控器各通道数据，采样频率：100Hz
+{
+    if (should_log(MASK_LOG_RCIN)) {
+        logger.Write_RCIN();
+        if (rssi.enabled()) {
+            logger.Write_RSSI();
+        }
+    }
+}
+
 // ten_hz_logging_loop
 // should be run at 10hz
 void Copter::ten_hz_logging_loop()
@@ -555,12 +577,14 @@ void Copter::ten_hz_logging_loop()
     if (should_log(MASK_LOG_MOTBATT)) {
         motors->Log_Write();
     }
+    /*
     if (should_log(MASK_LOG_RCIN)) {
         logger.Write_RCIN();
         if (rssi.enabled()) {
             logger.Write_RSSI();
         }
     }
+    */
     if (should_log(MASK_LOG_RCOUT)) {
         logger.Write_RCOUT();
     }

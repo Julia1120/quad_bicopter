@@ -47,8 +47,8 @@ protected:
 
     // calculated outputs
     float _throttle; // 0..1
-    float _tilt_front;  // -1..1
-    float _tilt_back;  // -1..1
+    //float _tilt_front;  // -1..1
+    //float _tilt_back;  // -1..1
     float _thrust_front;  // 0..1
     float _thrust_back;  // 0..1
 

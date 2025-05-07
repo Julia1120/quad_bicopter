@@ -4,6 +4,9 @@
 #include <AC_PID/AC_PID.h>
 #include <AP_Scheduler/AP_Scheduler.h>
 
+#include <GCS_MAVLink/GCS.h>
+#include <AP_Motors/AP_MotorsMatrix.h>
+
 // table of user settable parameters
 const AP_Param::GroupInfo AC_AttitudeControl_Multi::var_info[] = {
     // parameters from parent vehicle
@@ -439,8 +442,502 @@ void AC_AttitudeControl_Multi::update_throttle_rpy_mix()
     _throttle_rpy_mix = constrain_float(_throttle_rpy_mix, 0.1f, AC_ATTITUDE_CONTROL_MAX);
 }
 
+int16_t AC_AttitudeControl_Multi::rcarmin_output()//根据8通道pwm值决定转动机臂命令是由旋钮发出还是拨杆发出
+{
+    uint16_t rc8_in=rc().channel(CH_8)->get_radio_in();//读取8通道开关位置信息
+    if((rc8_in<=1100))//旋钮控制机臂旋转
+    {
+        rcarm_in_read=rc().channel(CH_6)->get_radio_in();//读取6通道开关位置信息
+        rcarm_in_output=rcarm_in_read;
+    }
+    else if((rc8_in>=1900))//拨杆控制机臂旋转
+    {
+        rcarm_in_read=rc().channel(CH_9)->get_radio_in();//读取6通道开关位置信息
+        rcarm_in_output=rcarm_in_read;
+    }
+
+    return rcarm_in_output;
+}
+
+float AC_AttitudeControl_Multi::get_arm_angle_degrees()//将舵机角度换算成机臂角度，返回的是两机臂夹角
+{
+    uint16_t rcarm_in=rcarmin_output();//读取移动机臂通道开关位置信息
+    
+    f_rcarm_in=float(rcarm_in);//将6通道信号值转为浮点数
+
+    float k_RC_to_PWM=(pwm_max-pwm_min)/(1100-1900);
+    float b_RC_to_PWM=pwm_max-k_RC_to_PWM*1100;
+    
+    servo_pwm_value=k_RC_to_PWM*f_rcarm_in+b_RC_to_PWM;//求6通道每个信号值对应的输出到舵机的pwm值
+
+    //舵盘直驱计算机臂夹角
+    arm_angle_degrees_1=((servo_pwm_value-pwm_min)/(pwm_max-pwm_min))*90;
+    gcs().send_text(MAV_SEVERITY_NOTICE, "机臂夹角%f",arm_angle_degrees_1);
+    /*
+    //四连杆机构计算机臂夹角
+    servo_angle_degrees=((servo_pwm_value-pwm_min)/(pwm_max-pwm_min))*73.68+16.27;//根据舵机的pwm值计算舵机与固定机臂夹角
+
+    if(servo_angle_degrees>=16.27&&servo_angle_degrees<=48.62)
+    {
+        arm_angle_degrees_1=0.0064*servo_angle_degrees*servo_angle_degrees+0.579*servo_angle_degrees-10.817;
+    }
+    else if(servo_angle_degrees>48.62&&servo_angle_degrees<=72.19)
+    {
+        arm_angle_degrees_1=0.0076*servo_angle_degrees*servo_angle_degrees+0.35*servo_angle_degrees-4.9661;
+    }
+    else if(servo_angle_degrees>72.19&&servo_angle_degrees<=89.95)
+    {
+        arm_angle_degrees_1=0.0145*servo_angle_degrees*servo_angle_degrees-0.6659*servo_angle_degrees+32.357;
+    }
+
+    //arm_angle_degrees_1=90*(rcarm_in-1100)/800;
+        
+    //arm_angle_degrees_1 = cal_arm_angle_degrees(servo_angle_degrees, lower_arm_angle_degrees, upper_arm_angle_degrees);//计算移动机臂的转角
+
+    //四连杆机构计算机臂夹角结束
+    */
+        
+    return arm_angle_degrees_1;
+
+}
+
+//计算扭转机臂俯仰转动惯量
+float AC_AttitudeControl_Multi::cal_dynamic_arm_pitch_intertia(float arm_angle_deg)
+{
+    float move_angle_deg=90-arm_angle_deg;                 //机臂转过角度，绕z轴旋转角度
+    float sin_moveangle=sinf(radians(move_angle_deg));
+    float cos_moveangle=cosf(radians(move_angle_deg));
+
+    float J_movearm_pitch=J_movearm_xx*cos_moveangle*cos_moveangle
+                         +J_movearm_yy*sin_moveangle*sin_moveangle;
+    
+    return J_movearm_pitch;
+}
+//计算扭转机臂滚转转动惯量
+float AC_AttitudeControl_Multi::cal_dynamic_arm_roll_intertia(float arm_angle_deg)
+{
+    float move_angle_deg=90-arm_angle_deg;                  //机臂转过角度，绕z轴旋转角度
+    float sin_moveangle=sinf(radians(move_angle_deg));
+    float cos_moveangle=cosf(radians(move_angle_deg));
+                                        
+    float J_movearm_roll=J_movearm_xx*sin_moveangle*sin_moveangle
+                        +J_movearm_yy*cos_moveangle*cos_moveangle;
+    
+    return J_movearm_roll;
+}
+
+
+//计算整机俯仰转动惯量
+float AC_AttitudeControl_Multi::cal_dynamic_pitch_intertia(float arm_angle_deg)
+{
+    float _arm_angle_deg=arm_angle_deg;                     //两机臂夹角
+    float mov_motor_Y=l_arm*cosf(radians(_arm_angle_deg));
+
+    float J_movearm_pitch=cal_dynamic_arm_pitch_intertia(_arm_angle_deg);
+
+    float J_pitch_all=J_pitch_body
+                     +2*(J_motor_pitch+m_motor_kg*(mov_motor_Y*mov_motor_Y+20*20))//20是电机重心到整体重心的距离
+                     +J_movearm_pitch+m_movearm_kg*d_arm_to_G*d_arm_to_G;
+    
+    //gcs().send_text(MAV_SEVERITY_NOTICE, "俯仰转动惯量%f",J_pitch_all);
+    float k_pitch=J_pitch_all/(2*l_arm+2*mov_motor_Y);
+    //gcs().send_text(MAV_SEVERITY_NOTICE, "俯仰运动系数%f",k_pitch);
+
+    //return J_pitch_all;
+    return k_pitch;
+}
+//计算整机滚转转动惯量
+float AC_AttitudeControl_Multi::cal_dynamic_roll_intertia(float arm_angle_deg)
+{
+    float _arm_angle_deg=arm_angle_deg;                     //两机臂夹角
+    float mov_motor_X=l_arm*sinf(radians(_arm_angle_deg));
+
+    float J_movearm_roll=cal_dynamic_arm_roll_intertia(_arm_angle_deg);
+
+    float J_roll_all=J_roll_body
+                    +2*(J_motor_roll+m_motor_kg*(mov_motor_X*mov_motor_X+20*20))//20是电机重心到整体重心的距离
+                    +J_movearm_roll+m_movearm_kg*d_arm_to_G*d_arm_to_G;
+
+    //float upservo_value=factor.get_tront_servo_value();
+    //gcs().send_text(MAV_SEVERITY_NOTICE, "计算%f",upservo_value);
+    float upservo_pwm=500*upservo_value+1500;
+    //gcs().send_text(MAV_SEVERITY_NOTICE, "倾转舵机pwm%f",upservo_pwm);
+    float upservo_angle_degree=fabs(upservo_pwm-1500)*73.68/900;
+    //gcs().send_text(MAV_SEVERITY_NOTICE, "舵机倾转角%f",upservo_angle_degree);
+    float sin_upservo=sinf(radians(upservo_angle_degree));
+
+    float k_roll=J_roll_all/(2*mov_motor_X+2*h_upservo*sin_upservo);
+     
+    //gcs().send_text(MAV_SEVERITY_NOTICE, "滚转转动惯量%f",J_roll_all);
+
+    return k_roll;
+}
+
+
+//计算俯仰构型信任系数
+float AC_AttitudeControl_Multi::cal_dynamic_pitch_trust_coefficient()
+{
+    arm_angle_degrees=get_arm_angle_degrees();//两机臂夹角
+    // gcs().send_text(MAV_SEVERITY_NOTICE, "机臂夹角%f",arm_angle_degrees);
+
+    //float J_pitch=cal_dynamic_pitch_intertia(arm_angle_degrees);//x轴转动惯量,kg*mm2
+    float k_pitch=cal_dynamic_pitch_intertia(arm_angle_degrees);
+
+    float k_pitch_quad=J_pitch_quad/(2*l_arm);
+    float k_pitch_dual=J_pitch_dual/(4*l_arm);
+
+    Kt_pitch=fabs(k_pitch-k_pitch_dual)/(fabs(k_pitch-k_pitch_quad)+fabs(k_pitch-k_pitch_dual));
+    
+    //Kt_pitch=fabs(J_pitch-J_pitch_dual)/(fabs(J_pitch-J_pitch_quad)+fabs(J_pitch-J_pitch_dual));
+    //Kt_pitch=-(J_pitch-J_pitch_dual)/((J_pitch-J_pitch_quad)-(J_pitch-J_pitch_dual));
+
+    return Kt_pitch;
+}
+//计算滚转构型信任系数
+float AC_AttitudeControl_Multi::cal_dynamic_roll_trust_coefficient()
+{
+    arm_angle_degrees=get_arm_angle_degrees();//两机臂夹角
+    //float J_roll=cal_dynamic_roll_intertia(arm_angle_degrees);//y轴转动惯量,kg*mm2
+    
+    //float upservo_value=factor.get_tront_servo_value();
+    //float upservo_pwm=500*upservo_value+upservo_mid_value;
+    //float upservo_angle_degree=fabs(upservo_pwm-upservo_mid_value)*73.68/900;
+    float sin_upservo=sinf(radians(16.4));  //upservo_angle_degree->10
+
+    float k_roll=cal_dynamic_roll_intertia(arm_angle_degrees);
+
+    float k_roll_quad=J_roll_quad/(2*l_arm);
+    float k_roll_dual=J_roll_dual/(2*h_upservo*sin_upservo);
+    Kt_roll=fabs(k_roll-k_roll_dual)/(fabs(k_roll-k_roll_quad)+fabs(k_roll-k_roll_dual));
+    
+    //Kt_roll=fabs(J_roll-J_roll_dual)/(fabs(J_roll-J_roll_quad)+fabs(J_roll-J_roll_dual));
+    //Kt_roll=(J_roll-J_roll_dual)/(-(J_roll-J_roll_quad)+(J_roll-J_roll_dual));
+
+    return Kt_roll;
+}
+
+void AC_AttitudeControl_Multi::dynamic_pid()//动态调整pid的值
+{
+    /*
+    //quad roll
+    float quad_roll_kp=0.085;
+    float quad_roll_ki=0.02;
+    float quad_roll_kd=0.001;
+    //quad pitch
+    float quad_pitch_kp=0.06;
+    float quad_pitch_ki=0.01;
+    float quad_pitch_kd=0.001;
+
+    //dual roll
+    float dual_roll_kp=0.12;
+    float dual_roll_ki=0.02;
+    float dual_roll_kd=0.001;
+    //dual pitch
+    float dual_pitch_kp=0.08;
+    float dual_pitch_ki=0.012;
+    float dual_pitch_kd=0.001;
+    
+
+    uint16_t rcarm_in=rcarmin_output();//读取移动机臂通道开关位置信息
+    if(rcarm_in<=1100)
+    {
+        //roll
+        get_rate_roll_pid().kP(constrain_float(quad_roll_kp,quad_roll_kp,dual_roll_kp));
+        get_rate_roll_pid().kI(constrain_float(quad_roll_ki,quad_roll_ki,dual_roll_ki));
+        get_rate_roll_pid().kD(constrain_float(dual_roll_kd,quad_roll_kd,dual_roll_kd));
+        //pitch
+        get_rate_pitch_pid().kP(constrain_float(quad_pitch_kp,quad_pitch_kp,dual_pitch_kp));
+        get_rate_pitch_pid().kI(constrain_float(quad_pitch_ki,quad_pitch_ki,dual_pitch_ki));
+        get_rate_pitch_pid().kD(constrain_float(quad_pitch_kd,quad_pitch_kd,dual_pitch_kd));
+    
+    }
+    else if(rcarm_in<1900&&rcarm_in>1100)
+    {
+        Kt_roll=cal_dynamic_roll_trust_coefficient();
+        //gcs().send_text(MAV_SEVERITY_NOTICE, "滚转信任系数%f",Kt_roll);
+        float dynamic_roll_kp=quad_roll_kp*Kt_roll+dual_roll_kp*(1-Kt_roll);
+        float dynamic_roll_ki=quad_roll_ki*Kt_roll+dual_roll_ki*(1-Kt_roll);
+        float dynamic_roll_kd=quad_roll_kd*Kt_roll+dual_roll_kd*(1-Kt_roll);
+        
+        Kt_pitch=cal_dynamic_pitch_trust_coefficient();
+        //gcs().send_text(MAV_SEVERITY_NOTICE, "俯仰信任函数%f",Kt_pitch);
+        float dynamic_pitch_kp=quad_pitch_kp*Kt_pitch+dual_pitch_kp*(1-Kt_pitch);
+        float dynamic_pitch_ki=quad_pitch_ki*Kt_pitch+dual_pitch_ki*(1-Kt_pitch);
+        float dynamic_pitch_kd=quad_pitch_kd*Kt_pitch+dual_pitch_kd*(1-Kt_pitch);
+
+        //roll
+        get_rate_roll_pid().kP(constrain_float(dynamic_roll_kp,quad_roll_kp,dual_roll_kp));
+        get_rate_roll_pid().kI(constrain_float(dynamic_roll_ki,quad_roll_ki,dual_roll_ki));
+        get_rate_roll_pid().kD(constrain_float(dynamic_roll_kd,quad_roll_kd,dual_roll_kd));
+        //pitch
+        get_rate_pitch_pid().kP(constrain_float(dynamic_pitch_kp,quad_pitch_kp,dual_pitch_kp));
+        get_rate_pitch_pid().kI(constrain_float(dynamic_pitch_ki,quad_pitch_ki,dual_pitch_ki));
+        get_rate_pitch_pid().kD(constrain_float(dynamic_pitch_kd,quad_pitch_kd,dual_pitch_kd));
+        
+        
+        //gcs().send_text(MAV_SEVERITY_NOTICE, "俯仰ki%f",dynamic_pitch_ki);
+        
+    }
+    else if(rcarm_in>=1900)
+    {
+        //roll
+        get_rate_roll_pid().kP(constrain_float(dual_roll_kp,quad_roll_kp,dual_roll_kp));
+        get_rate_roll_pid().kI(constrain_float(dual_roll_ki,quad_roll_ki,dual_roll_ki));
+        get_rate_roll_pid().kD(constrain_float(dual_roll_kd,quad_roll_kd,dual_roll_kd));
+        //pitch
+        get_rate_pitch_pid().kP(constrain_float(dual_pitch_kp,quad_pitch_kp,dual_pitch_kp));
+        get_rate_pitch_pid().kI(constrain_float(dual_pitch_ki,quad_pitch_ki,dual_pitch_ki));
+        get_rate_pitch_pid().kD(constrain_float(dual_pitch_kd,quad_pitch_kd,dual_pitch_kd));
+    
+    }
+    */
+   float pitch_kp_min=MIN(init_quad_pitch_kp,quad_pitch_kp);
+   float pitch_kp_max=MIN(init_dual_pitch_kp,dual_pitch_kp);
+
+   float pitch_ki_min=MIN(init_quad_pitch_ki,quad_pitch_ki);
+   float pitch_ki_max=MIN(init_dual_pitch_ki,dual_pitch_ki);
+
+   float pitch_kd_min=MIN(init_quad_pitch_kd,quad_pitch_kd);
+   float pitch_kd_max=MIN(init_dual_pitch_kd,dual_pitch_kd);
+
+
+   float roll_kp_min=MIN(init_quad_roll_kp,quad_roll_kp);
+   float roll_kp_max=MIN(init_dual_roll_kp,dual_roll_kp);
+
+   float roll_ki_min=MIN(init_quad_roll_ki,quad_roll_ki);
+   float roll_ki_max=MIN(init_dual_roll_ki,dual_roll_ki);
+
+   float roll_kd_min=MIN(init_quad_roll_kd,quad_roll_kd);
+   float roll_kd_max=MIN(init_dual_roll_kd,dual_roll_kd);
+
+
+    uint16_t rcarm_in=rcarmin_output();//读取移动机臂通道开关位置信息
+    if(rcarm_in<=1100)
+    {
+        roll_kp=init_quad_roll_kp;
+        roll_ki=init_quad_roll_ki;
+        roll_kd=init_quad_roll_kd;
+
+        pitch_kp=init_quad_pitch_kp;
+        pitch_ki=init_quad_pitch_ki;
+        pitch_kd=init_quad_pitch_kd;
+        //roll
+        get_rate_roll_pid().kP(constrain_float(roll_kp, roll_kp_min,roll_kp_max));
+        get_rate_roll_pid().kI(constrain_float(roll_ki, roll_ki_min,roll_ki_max));
+        get_rate_roll_pid().kD(constrain_float(roll_kd, roll_kd_min,roll_kd_max));
+        //pitch
+        get_rate_pitch_pid().kP(constrain_float(pitch_kp, pitch_kp_min,pitch_kp_max));
+        get_rate_pitch_pid().kI(constrain_float(pitch_ki, pitch_ki_min,pitch_ki_max));
+        get_rate_pitch_pid().kD(constrain_float(pitch_kd, pitch_kd_min,pitch_kd_max));
+    
+    }
+
+    /*
+    else if(rcarm_in<1900&&rcarm_in>1100)
+    {
+        arm_angle_degrees=get_arm_angle_degrees();
+
+        Kt_roll=cal_dynamic_roll_trust_coefficient();
+        gcs().send_text(MAV_SEVERITY_NOTICE, "滚转信任系数%f",Kt_roll);
+
+        Kt_pitch=cal_dynamic_pitch_trust_coefficient();
+        gcs().send_text(MAV_SEVERITY_NOTICE, "俯仰信任函数%f",Kt_pitch);
+
+        //if(arm_angle_degrees<90&&arm_angle_degrees>=47.5875)
+        //{
+            float dynamic_roll_kp=init_quad_roll_kp*Kt_roll+init_dual_roll_kp*(1-Kt_roll);
+            float dynamic_roll_ki=init_quad_roll_ki*Kt_roll+init_dual_roll_ki*(1-Kt_roll);
+            float dynamic_roll_kd=init_quad_roll_kd*Kt_roll+init_dual_roll_kd*(1-Kt_roll);
+       
+            float dynamic_pitch_kp=init_quad_pitch_kp*Kt_pitch+init_dual_pitch_kp*(1-Kt_pitch);
+            float dynamic_pitch_ki=init_quad_pitch_ki*Kt_pitch+init_dual_pitch_ki*(1-Kt_pitch);
+            float dynamic_pitch_kd=init_quad_pitch_kd*Kt_pitch+init_dual_pitch_kd*(1-Kt_pitch);
+
+            roll_kp=dynamic_roll_kp;
+            roll_ki=dynamic_roll_ki;
+            roll_kd=dynamic_roll_kd;
+
+            pitch_kp=dynamic_pitch_kp;
+            pitch_ki=dynamic_pitch_ki;
+            pitch_kd=dynamic_pitch_kd;
+        //}
+        
+        else if(arm_angle_degrees<47.5875&&arm_angle_degrees>0.0)
+        {
+        
+            //Kt_roll=cal_dynamic_roll_trust_coefficient();
+            //gcs().send_text(MAV_SEVERITY_NOTICE, "滚转信任系数%f",Kt_roll);
+            float dynamic_roll_kp=quad_roll_kp*Kt_roll+dual_roll_kp*(1-Kt_roll);
+            float dynamic_roll_ki=quad_roll_ki*Kt_roll+dual_roll_ki*(1-Kt_roll);
+            float dynamic_roll_kd=quad_roll_kd*Kt_roll+dual_roll_kd*(1-Kt_roll);
+       
+            //Kt_pitch=cal_dynamic_pitch_trust_coefficient();
+            //gcs().send_text(MAV_SEVERITY_NOTICE, "俯仰信任函数%f",Kt_pitch);
+            float dynamic_pitch_kp=quad_pitch_kp*Kt_pitch+dual_pitch_kp*(1-Kt_pitch);
+            float dynamic_pitch_ki=quad_pitch_ki*Kt_pitch+dual_pitch_ki*(1-Kt_pitch);
+            float dynamic_pitch_kd=quad_pitch_kd*Kt_pitch+dual_pitch_kd*(1-Kt_pitch);
+
+            roll_kp=dynamic_roll_kp;
+            roll_ki=dynamic_roll_ki;
+            roll_kd=dynamic_roll_kd;
+
+            pitch_kp=dynamic_pitch_kp;
+            pitch_ki=dynamic_pitch_ki;
+            pitch_kd=dynamic_pitch_kd;
+        }
+        
+
+        //roll
+        get_rate_roll_pid().kP(constrain_float(roll_kp,init_quad_roll_kp,dual_roll_kp));
+        get_rate_roll_pid().kI(constrain_float(roll_ki,init_quad_roll_ki,dual_roll_ki));
+        get_rate_roll_pid().kD(constrain_float(roll_kd,init_quad_roll_kd,dual_roll_kd));
+        //pitch
+        get_rate_pitch_pid().kP(constrain_float(pitch_kp,init_quad_pitch_kp,dual_pitch_kp));
+        get_rate_pitch_pid().kI(constrain_float(pitch_ki,init_quad_pitch_ki,dual_pitch_ki));
+        get_rate_pitch_pid().kD(constrain_float(pitch_kd,init_quad_pitch_kd,dual_pitch_kd));
+       
+        }
+        else if(arm_angle_degrees>47.0&&arm_angle_degrees<90.0)
+        {
+            float k_roll=cal_dynamic_roll_intertia(47.0);
+
+            float k_roll_quad=J_roll_quad/(2*l_arm);
+            float k_roll_dual=J_roll_dual/(2*h_upservo*0.173648);//sin(10)
+            Kt_roll=fabsf(k_roll-k_roll_dual)/(fabsf(k_roll-k_roll_quad)+fabsf(k_roll-k_roll_dual));
+
+            float dynamic_roll_kp=quad_roll_kp*Kt_roll+dual_roll_kp*(1-Kt_roll);
+            float dynamic_roll_ki=quad_roll_ki*Kt_roll+dual_roll_ki*(1-Kt_roll);
+            float dynamic_roll_kd=quad_roll_kd*Kt_roll+dual_roll_kd*(1-Kt_roll);
+
+
+            float k_pitch=cal_dynamic_pitch_intertia(47.0);
+
+            float k_pitch_quad=J_pitch_quad/(2*l_arm);
+            float k_pitch_dual=J_pitch_dual/(4*l_arm);
+            Kt_pitch=fabsf(k_pitch-k_pitch_dual)/(fabsf(k_pitch-k_pitch_quad)+fabsf(k_pitch-k_pitch_dual));
+            
+            float dynamic_pitch_kp=quad_pitch_kp*Kt_pitch+dual_pitch_kp*(1-Kt_pitch);
+            float dynamic_pitch_ki=quad_pitch_ki*Kt_pitch+dual_pitch_ki*(1-Kt_pitch);
+            float dynamic_pitch_kd=quad_pitch_kd*Kt_pitch+dual_pitch_kd*(1-Kt_pitch);
+            //gcs().send_text(MAV_SEVERITY_NOTICE, "kp受影响%f",dynamic_pitch_kp);
+
+            //roll
+            get_rate_roll_pid().kP(constrain_float(dynamic_roll_kp,quad_roll_kp,dual_roll_kp));
+            get_rate_roll_pid().kI(constrain_float(dynamic_roll_ki,quad_roll_ki,dual_roll_ki));
+            get_rate_roll_pid().kD(constrain_float(dynamic_roll_kd,quad_roll_kd,dual_roll_kd));
+            //pitch
+            get_rate_pitch_pid().kP(constrain_float(dynamic_pitch_kp,quad_pitch_kp,dual_pitch_kp));
+            get_rate_pitch_pid().kI(constrain_float(dynamic_pitch_ki,quad_pitch_ki,dual_pitch_ki));
+            get_rate_pitch_pid().kD(constrain_float(dynamic_pitch_kd,quad_pitch_kd,dual_pitch_kd));
+        }
+        
+        
+        
+    }
+    */
+    else if(rcarm_in<1900&&rcarm_in>1100)
+    {
+        arm_angle_degrees=get_arm_angle_degrees();
+
+        Kt_roll=cal_dynamic_roll_trust_coefficient();
+        gcs().send_text(MAV_SEVERITY_NOTICE, "滚转信任系数%f",Kt_roll);
+
+        Kt_pitch=cal_dynamic_pitch_trust_coefficient();
+        gcs().send_text(MAV_SEVERITY_NOTICE, "俯仰信任函数%f",Kt_pitch);
+
+        if(arm_angle_degrees<90&&arm_angle_degrees>=23.0625)
+        {
+            float dynamic_roll_kp=init_quad_roll_kp*Kt_roll+init_dual_roll_kp*(1-Kt_roll);
+            float dynamic_roll_ki=init_quad_roll_ki*Kt_roll+init_dual_roll_ki*(1-Kt_roll);
+            float dynamic_roll_kd=init_quad_roll_kd*Kt_roll+init_dual_roll_kd*(1-Kt_roll);
+       
+            float dynamic_pitch_kp=init_quad_pitch_kp*Kt_pitch+init_dual_pitch_kp*(1-Kt_pitch);
+            float dynamic_pitch_ki=init_quad_pitch_ki*Kt_pitch+init_dual_pitch_ki*(1-Kt_pitch);
+            float dynamic_pitch_kd=init_quad_pitch_kd*Kt_pitch+init_dual_pitch_kd*(1-Kt_pitch);
+
+            roll_kp=dynamic_roll_kp;
+            roll_ki=dynamic_roll_ki;
+            roll_kd=dynamic_roll_kd;
+
+            pitch_kp=dynamic_pitch_kp;
+            pitch_ki=dynamic_pitch_ki;
+            pitch_kd=dynamic_pitch_kd;
+        }
+        else if(arm_angle_degrees<23.0625&&arm_angle_degrees>=10)
+        {
+            float dynamic_roll_kp=quad_roll_kp*Kt_roll+dual_roll_kp*(1-Kt_roll);
+            float dynamic_roll_ki=quad_roll_ki*Kt_roll+dual_roll_ki*(1-Kt_roll);
+            float dynamic_roll_kd=quad_roll_kd*Kt_roll+dual_roll_kd*(1-Kt_roll);
+       
+            float dynamic_pitch_kp=quad_pitch_kp*Kt_pitch+dual_pitch_kp*(1-Kt_pitch);
+            float dynamic_pitch_ki=quad_pitch_ki*Kt_pitch+dual_pitch_ki*(1-Kt_pitch);
+            float dynamic_pitch_kd=quad_pitch_kd*Kt_pitch+dual_pitch_kd*(1-Kt_pitch);
+
+            roll_kp=dynamic_roll_kp;
+            roll_ki=dynamic_roll_ki;
+            roll_kd=dynamic_roll_kd;
+
+            pitch_kp=dynamic_pitch_kp;
+            pitch_ki=dynamic_pitch_ki;
+            pitch_kd=dynamic_pitch_kd;
+        }
+        else if(arm_angle_degrees<10&&arm_angle_degrees>=0)
+        {
+            roll_kp=init_dual_roll_kp;
+            roll_ki=init_dual_roll_ki;
+            roll_kd=init_dual_roll_kd;
+
+            pitch_kp=init_dual_pitch_kp;
+            pitch_ki=init_dual_pitch_ki;
+            pitch_kd=init_dual_pitch_kd;
+        }
+        
+        //roll
+        get_rate_roll_pid().kP(constrain_float(roll_kp, roll_kp_min,roll_kp_max));
+        get_rate_roll_pid().kI(constrain_float(roll_ki, roll_ki_min,roll_ki_max));
+        get_rate_roll_pid().kD(constrain_float(roll_kd, roll_kd_min,roll_kd_max));
+        //pitch
+        get_rate_pitch_pid().kP(constrain_float(pitch_kp, pitch_kp_min,pitch_kp_max));
+        get_rate_pitch_pid().kI(constrain_float(pitch_ki, pitch_ki_min,pitch_ki_max));
+        get_rate_pitch_pid().kD(constrain_float(pitch_kd, pitch_kd_min,pitch_kd_max));
+    }
+
+    else if(rcarm_in>=1900)
+    {
+
+        roll_kp=init_dual_roll_kp;
+        roll_ki=init_dual_roll_ki;
+        roll_kd=init_dual_roll_kd;
+
+        pitch_kp=init_dual_pitch_kp;
+        pitch_ki=init_dual_pitch_ki;
+        pitch_kd=init_dual_pitch_kd;
+
+        yaw_kp=0.18;
+        yaw_ki=0.02;
+        yaw_kd=0.00;
+
+        //roll
+        get_rate_roll_pid().kP(constrain_float(roll_kp, roll_kp_min,roll_kp_max));
+        get_rate_roll_pid().kI(constrain_float(roll_ki, roll_ki_min,roll_ki_max));
+        get_rate_roll_pid().kD(constrain_float(roll_kd, roll_kd_min,roll_kd_max));
+        //pitch
+        get_rate_pitch_pid().kP(constrain_float(pitch_kp, pitch_kp_min,pitch_kp_max));
+        get_rate_pitch_pid().kI(constrain_float(pitch_ki, pitch_ki_min,pitch_ki_max));
+        get_rate_pitch_pid().kD(constrain_float(pitch_kd, pitch_kd_min,pitch_kd_max));
+        //yaw
+        get_rate_yaw_pid().kP(constrain_float(yaw_kp,0.18,0.22));
+        get_rate_yaw_pid().kI(constrain_float(yaw_ki,0.018,0.025));
+        get_rate_yaw_pid().kI(constrain_float(yaw_kd,0.0,0.002));
+    
+    }
+    
+}
+
 void AC_AttitudeControl_Multi::rate_controller_run()
 {
+    dynamic_pid();//动态调整pid的值
+
     // boost angle_p/pd each cycle on high throttle slew
     update_throttle_gain_boost();
 

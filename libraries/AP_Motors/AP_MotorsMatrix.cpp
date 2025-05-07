@@ -199,6 +199,9 @@ void AP_MotorsMatrix::output_to_motors()//过渡模式，赋予舵机滚转因�
         }
     }
 
+    //SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorLeft, tran_tilt_front*SERVO_OUTPUT_RANGE);    
+    //SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRight, tran_tilt_back*SERVO_OUTPUT_RANGE);
+
     SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorLeft, _tilt_front*SERVO_OUTPUT_RANGE);    
     SRV_Channels::set_output_scaled(SRV_Channel::k_tiltMotorRight, _tilt_back*SERVO_OUTPUT_RANGE);
 
@@ -206,7 +209,6 @@ void AP_MotorsMatrix::output_to_motors()//过渡模式，赋予舵机滚转因�
 
 void AP_MotorsMatrix::quad_output_to_motors()//四旋翼模式
 {
-    gcs().send_text(MAV_SEVERITY_NOTICE, "Quad Mode output_to_motors");
     int8_t i;
 
     switch (_spool_state) {
@@ -253,7 +255,7 @@ void AP_MotorsMatrix::quad_output_to_motors()//四旋翼模式
 
 void AP_MotorsMatrix::dual_output_to_motors()//双旋翼模式
 {
-    gcs().send_text(MAV_SEVERITY_NOTICE, "Dual Mode output_to_motors");
+    
     if (!initialised_ok()) {
         return;
     }
@@ -329,11 +331,86 @@ float AP_MotorsMatrix::boost_ratio(float boost_value, float normal_value) const
     return _thrust_boost_ratio * boost_value + (1.0 - _thrust_boost_ratio) * normal_value;
 }
 
+/*
+float AP_MotorsMatrix::cal_little_T_los(float arm_angle_degrees_cal)//计算47.5875-40.5度推力损失,返回值为1-损失，即实际推力沾不受气流影响时比例
+{
+    float angle_degree=arm_angle_degrees_cal;
+    float T_daynamic_N=Y0
+                      +(A0/(sqrtf(2*M_PI)*W0*angle_degree))
+                      *expf(-(logf(angle_degree/Xc0))*(logf(angle_degree/Xc0))/(2*W0*W0));
+
+    float k_los=T_daynamic_N/T0_N;
+
+    return k_los;
+}
+*/
+
+float AP_MotorsMatrix::cal_part_T_los(float arm_angle_degrees_cal)//计算23-9.9度推力损失,返回值为1-损失，即实际推力沾不受气流影响时比例
+{
+    float angle_degree=arm_angle_degrees_cal;
+    //origin拟合出的50%油门下推力曲线公式
+    float T_daynamic_N=Intercept
+                      +B1*angle_degree
+                      +B2*angle_degree*angle_degree
+                      +B3*angle_degree*angle_degree*angle_degree
+                      +B4*angle_degree*angle_degree*angle_degree*angle_degree;
+    //gcs().send_text(MAV_SEVERITY_NOTICE, "0-23受损推力%f",T_daynamic_N);
+
+    float k_los=T_daynamic_N/T0_N;
+
+    return k_los;
+}
+
+float AP_MotorsMatrix::cal_total_T_los(float arm_angle_degrees_cal)//计算0-9.9度推力损失,返回值为1-损失，即实际推力沾不受气流影响时比例
+{
+   //float angle_degree=arm_angle_degrees_cal;
+    //float T_daynamic_N=K1*angle_degree+B11;//origin拟合出的50%油门下推力曲线公式
+    //gcs().send_text(MAV_SEVERITY_NOTICE, "23-40受损推力%f",T_daynamic_N);
+
+    float k_los=Tt_N/T0_N;
+
+    return k_los;
+}
+
+float AP_MotorsMatrix::cal_T_lose(float arm_angle_degree_cal)//根据机臂夹角分段计算推力损失,返回值为1-损失，即实际推力沾不受气流影响时比例
+{
+    float arm_angle_loscal_degrees=arm_angle_degree_cal;
+    /*
+    if(arm_angle_loscal_degrees<=47.5875&&arm_angle_loscal_degrees>40.5)
+    {
+        k_lose_angle=cal_little_T_los(arm_angle_loscal_degrees);
+    }
+    */
+    if(arm_angle_loscal_degrees<=23.0625&&arm_angle_loscal_degrees>10.0)
+    {
+        k_lose_angle=cal_part_T_los(arm_angle_loscal_degrees);
+    }
+
+    else if(arm_angle_loscal_degrees<=10.0&&arm_angle_loscal_degrees>=0.0)
+    {
+        k_lose_angle=cal_total_T_los(arm_angle_loscal_degrees);
+    }
+    else if(arm_angle_loscal_degrees<=90.0&&arm_angle_loscal_degrees>23.0625)
+    {
+        k_lose_angle=1;
+    }
+    //gcs().send_text(MAV_SEVERITY_NOTICE, "推力比%f",k_lose_angle);
+
+    return k_lose_angle;
+}
+
+
 // output_armed - sends commands to the motors
 // includes new scaling stability patch
 
 void AP_MotorsMatrix::output_armed_stabilizing()//过渡模式，赋予舵机滚转因子
 {
+    arm_angle_degrees=get_arm_angle_degrees();
+   
+    //根据机臂夹角计算推力损失
+    k_lose_angle=cal_T_lose(arm_angle_degrees);//根据机臂夹角分段计算推力损失,返回值为1-损失，即实际推力沾不受气流影响时比例
+    gcs().send_text(MAV_SEVERITY_NOTICE, "推力比%f",k_lose_angle);
+
     // apply voltage and air pressure compensation
     const float compensation_gain = thr_lin.get_compensation_gain(); // compensation for battery voltage and altitude
 
@@ -347,13 +424,15 @@ void AP_MotorsMatrix::output_armed_stabilizing()//过渡模式，赋予舵机滚
     float yaw_thrust = (_yaw_in + _yaw_in_ff) * compensation_gain;
 
     // throttle thrust input value, 0.0 - 1.0
-    float throttle_thrust = get_throttle() * compensation_gain;
+    float throttle_thrust = get_throttle() * compensation_gain*(1/k_lose_angle);
+    //float throttle_thrust_los_com = get_throttle() * compensation_gain*(1/k_lose_angle);
 
     // throttle thrust average maximum value, 0.0 - 1.0
     float throttle_avg_max = _throttle_avg_max * compensation_gain;
 
     // throttle thrust maximum value, 0.0 - 1.0, If thrust boost is active then do not limit maximum thrust
     const float throttle_thrust_max = boost_ratio(1.0, _throttle_thrust_max * compensation_gain);
+    //throttle_thrust_los_com=constrain_float(throttle_thrust_los_com,0.0f,throttle_thrust_max);
 
     // sanity check throttle is above zero and below current limited throttle
     if (throttle_thrust <= 0.0f) {
@@ -367,7 +446,6 @@ void AP_MotorsMatrix::output_armed_stabilizing()//过渡模式，赋予舵机滚
 
     // ensure that throttle_avg_max is between the input throttle and the maximum throttle
     throttle_avg_max = constrain_float(throttle_avg_max, throttle_thrust, throttle_thrust_max);
-
     // throttle providing maximum roll, pitch and yaw range
     // calculate the highest allowed average thrust that will provide maximum control range
     float throttle_thrust_best_rpy = MIN(0.5f, throttle_avg_max);
@@ -514,23 +592,86 @@ void AP_MotorsMatrix::output_armed_stabilizing()//过渡模式，赋予舵机滚
     // add scaled roll, pitch, constrained yaw and throttle for each motor
     const float throttle_thrust_best_plus_adj = throttle_thrust_best_rpy + thr_adj;
     for (uint8_t i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {
+        /*if(arm_angle_degrees<=90&&arm_angle_degrees>40.5)
+        {
+            if (motor_enabled[i]) {
+                _thrust_rpyt_out[i] = (throttle_thrust_best_plus_adj * _throttle_factor[i]) + (rpy_scale * _thrust_rpyt_out[i]);
+            }
+        }
+        else if(arm_angle_degrees<=40.5&&arm_angle_degrees>0)
+        {
+            if (motor_enabled[i]) {
+                float used_throttle=throttle_thrust_best_plus_adj;
+                switch(i)
+                {
+                    case 0:
+                    {
+                        used_throttle=throttle_thrust_los_com;
+                        break;
+                    }
+                    case 1:
+                    {
+                        used_throttle=throttle_thrust_los_com;
+                        break;
+                    }
+                    case 2:
+                    {
+                        used_throttle=throttle_thrust_best_plus_adj;
+                        break;
+                    }
+                    case 3:
+                    {
+                        used_throttle=throttle_thrust_best_plus_adj;
+                        break;
+                    }
+                }
+                if(i==0||i==1)
+                {
+                    used_throttle=throttle_thrust_los_com;
+                }
+                else if(i==2||i==3)
+                {
+                    used_throttle=throttle_thrust_best_plus_adj;
+                }
+                _thrust_rpyt_out[i] = (used_throttle * _throttle_factor[i]) + (rpy_scale * _thrust_rpyt_out[i]);
+            }
+        }*/
+            
+        
         if (motor_enabled[i]) {
             _thrust_rpyt_out[i] = (throttle_thrust_best_plus_adj * _throttle_factor[i]) + (rpy_scale * _thrust_rpyt_out[i]);
         }
+        
     }
 
-    arm_angle_degrees=get_arm_angle_degrees();
-    gcs().send_text(MAV_SEVERITY_NOTICE, "两机臂夹角为：%f",arm_angle_degrees);
-
+    //arm_angle_degrees=get_arm_angle_degrees();
+    //gcs().send_text(MAV_SEVERITY_NOTICE, "机臂夹角%f",arm_angle_degrees);
+    
+    _roll_servo_factor=1+cosf(radians(arm_angle_degrees + 90));
+    //根据机臂夹角计算推力损失
+    //k_lose_angle=cal_T_lose(arm_angle_degrees);//根据机臂夹角分段计算推力损失,返回值为1-损失，即实际推力沾不受气流影响时比例
+    //gcs().send_text(MAV_SEVERITY_NOTICE, "推力比%f",k_lose_angle);
     // determine throttle thrust for harmonic notch
     // compensation_gain can never be zero
-    _throttle_out =(1+0.8*cosf(radians(arm_angle_degrees))) *throttle_thrust_best_plus_adj / compensation_gain;//调节油门量
+    _throttle_out =throttle_thrust_best_plus_adj / compensation_gain;//调节油门量  /*(1+0.8*cosf(radians(arm_angle_degrees)))*/ 
 
-    float roll_servo_thrust = roll_thrust * _roll_servo_factor;//过渡模式下舵机的滚转输出
+    roll_servo_thrust = roll_thrust * _roll_servo_factor;//过渡模式下舵机的滚转输出
+
     
-    _roll_servo_factor=1-cosf(radians(arm_angle_degrees + 90));
-    _tilt_front = -roll_servo_thrust;//过度模式下的倾转舵机输出
-    _tilt_back  = -roll_servo_thrust;
+    //tran_tilt_front = -roll_servo_thrust;//过渡模式下的倾转舵机输出
+    //tran_tilt_back  = -roll_servo_thrust;
+    if(arm_angle_degrees<90.0&&arm_angle_degrees>40.5)
+    {
+        _tilt_front = -roll_servo_thrust;//过渡模式下的倾转舵机输出
+        _tilt_back  = -roll_servo_thrust;
+    }
+    else if(arm_angle_degrees<=40.5&&arm_angle_degrees>=0)
+    {
+        _tilt_front = -roll_servo_thrust- yaw_thrust;//过渡模式下的倾转舵机输出
+        _tilt_back  = -roll_servo_thrust+ yaw_thrust;
+    }
+    //_tilt_front = -roll_servo_thrust;//过渡模式下的倾转舵机输出
+    //_tilt_back  = -roll_servo_thrust;
 
     // check for failed motor
     check_for_failed_motor(throttle_thrust_best_plus_adj);
@@ -538,7 +679,6 @@ void AP_MotorsMatrix::output_armed_stabilizing()//过渡模式，赋予舵机滚
 
 void AP_MotorsMatrix::quad_output_armed_stabilizing()//四旋翼模式
 {
-    gcs().send_text(MAV_SEVERITY_NOTICE, "Quad Mode output_armed_stabilizing");
     // apply voltage and air pressure compensation
     const float compensation_gain = thr_lin.get_compensation_gain(); // compensation for battery voltage and altitude
 
@@ -712,7 +852,6 @@ void AP_MotorsMatrix::quad_output_armed_stabilizing()//四旋翼模式
 // calculate outputs to the motors
 void AP_MotorsMatrix::dual_output_armed_stabilizing()//双旋翼模式
 {
-    gcs().send_text(MAV_SEVERITY_NOTICE, "Dual Mode output_armed_stabilizing");
     float   roll_thrust;                // roll thrust input value, +/- 1.0
     float   pitch_thrust;               // pitch thrust input value, +/- 1.0
     float   yaw_thrust;                 // yaw thrust input value, +/- 1.0
@@ -753,14 +892,24 @@ void AP_MotorsMatrix::dual_output_armed_stabilizing()//双旋翼模式
         limit.roll = true;
     }
 
+    k_lose_angle=cal_T_lose(0.0);//根据机臂夹角分段计算推力损失,返回值为1-损失，即实际推力沾不受气流影响时比例
     // calculate left and right throttle outputs
-    _thrust_front = throttle_thrust + pitch_thrust * 0.5f;
-    _thrust_back  = throttle_thrust - pitch_thrust * 0.5f;
+    
+    _thrust_front = (1/k_lose_angle)*throttle_thrust + pitch_thrust * 0.5f;
+    _thrust_back  = (1/k_lose_angle)*throttle_thrust - pitch_thrust * 0.5f;
 
-    _thrust_motor1=_thrust_front* 0.9f;
-    _thrust_motor3=_thrust_front* 0.9f;
-    _thrust_motor2=_thrust_back * 0.9f;
-    _thrust_motor4=_thrust_back * 0.9f;
+    _thrust_motor1=_thrust_front;
+    _thrust_motor3=_thrust_front;
+    _thrust_motor2=_thrust_back;
+    _thrust_motor4=_thrust_back;
+    
+
+    /*
+    _thrust_motor1=(1/k_lose_angle)*throttle_thrust + pitch_thrust * 0.5f;
+    _thrust_motor3=throttle_thrust + pitch_thrust * 0.5f;
+    _thrust_motor2=(1/k_lose_angle)*throttle_thrust - pitch_thrust * 0.5f;
+    _thrust_motor4=throttle_thrust - pitch_thrust * 0.5f;
+    */
 
     thrust_maxf = MAX(_thrust_motor1,_thrust_motor3);
     thrust_minf = MIN(_thrust_motor1,_thrust_motor3);
@@ -806,7 +955,7 @@ void AP_MotorsMatrix::dual_output_armed_stabilizing()//双旋翼模式
     }
 
     // thrust vectoring
-    _tilt_front = -roll_thrust - yaw_thrust;//257-258测试一下纵列式能不能成功，最终偏航靠差速实现，不靠舵机
+    _tilt_front = -roll_thrust - yaw_thrust;
     _tilt_back  = -roll_thrust + yaw_thrust;
 }
 
@@ -931,9 +1080,10 @@ void AP_MotorsMatrix::add_motor_raw(int8_t motor_num, float roll_fac, float pitc
     }
 }
 
-/*uint16_t rc8_in=rc().channel(CH_8)->get_radio_in();//读取8通道开关位置信息
+
 int16_t AP_MotorsMatrix::rcarmin_output()//根据8通道pwm值决定转动机臂命令是由旋钮发出还是拨杆发出
 {
+    uint16_t rc8_in=rc().channel(CH_8)->get_radio_in();//读取8通道开关位置信息
     if((rc8_in<=1100))//旋钮控制机臂旋转
     {
         rcarm_in_read=rc().channel(CH_6)->get_radio_in();//读取6通道开关位置信息
@@ -941,32 +1091,32 @@ int16_t AP_MotorsMatrix::rcarmin_output()//根据8通道pwm值决定转动机臂
     }
     else if((rc8_in>=1900))//拨杆控制机臂旋转
     {
-        rcarm_in_read=rc().channel(CH_9)->get_radio_in();//读取6通道开关位置信息
+        rcarm_in_read=rc().channel(CH_9)->get_radio_in();//读取9通道开关位置信息
         rcarm_in_output=rcarm_in_read;
     }
 
     return rcarm_in_output;
-}*/
+}
 
 // add_motor using just position and prop direction - assumes that for each motor, roll and pitch factors are equal
 void AP_MotorsMatrix::add_motor(int8_t motor_num, float angle_degrees, float yaw_factor, uint8_t testing_order)
 {
-    //uint16_t rcarm_in=rcarmin_output();//读取移动机臂通道开关位置信息
-    uint16_t rcarm_in=rc().channel(CH_6)->get_radio_in();//读取6通道开关位置信息
+    uint16_t rcarm_in=rcarmin_output();//读取移动机臂通道开关位置信息
+    //uint16_t rcarm_in=rc().channel(CH_6)->get_radio_in();//读取6通道开关位置信息
     //可以改这个地方num为1、2的电机读取舵机角度，3、4电机正常读取
     if(rcarm_in<1900&&rcarm_in>1100)
     {
-        arm_angle_degrees=get_arm_angle_degrees();
+        arm_angle_degrees=get_arm_angle_degrees();//两机臂夹角
         motor1_angle_degrees=arm_angle_degrees;
         motor2_angle_degrees=arm_angle_degrees-180;
         switch ((motor_num))
         {
-            case 1:
+            case 0:
             {
                 angle_degrees=motor1_angle_degrees;
                 break;
             }
-            case 2:
+            case 1:
             {
                 angle_degrees=motor2_angle_degrees;
                 break;
@@ -982,16 +1132,22 @@ void AP_MotorsMatrix::add_motor(int8_t motor_num, float angle_degrees, float yaw
 // add_motor using position and prop direction. Roll and Pitch factors can differ (for asymmetrical frames)
 void AP_MotorsMatrix::add_motor(int8_t motor_num, float roll_factor_in_degrees, float pitch_factor_in_degrees, float yaw_factor, uint8_t testing_order)//roll,pitch是一样的，都是安装角
 {
-    //uint16_t rcarm_in=rcarmin_output();//读取移动机臂通道开关位置信息
-    uint16_t rcarm_in=rc().channel(CH_6)->get_radio_in();//读取6通道开关位置信息
+    uint16_t rcarm_in=rcarmin_output();//读取移动机臂通道开关位置信息
+    //uint16_t rcarm_in=rc().channel(CH_6)->get_radio_in();//读取6通道开关位置信息
 
     //3、4电机修改对俯仰的控制因子
     if(rcarm_in<1900&&rcarm_in>1100)
     {
-        arm_angle_degrees=get_arm_angle_degrees();
+        arm_angle_degrees=get_arm_angle_degrees();//两机臂夹角
         
         switch ((motor_num))
         {
+            case 0:
+            {
+                pitch_factor_tran=0.5*cosf(radians(pitch_factor_in_degrees));
+                pitch_factor_in_degrees=degrees(acosf(pitch_factor_tran));
+                break;
+            }
             case 1:
             {
                 pitch_factor_tran=0.5*cosf(radians(pitch_factor_in_degrees));
@@ -1000,17 +1156,11 @@ void AP_MotorsMatrix::add_motor(int8_t motor_num, float roll_factor_in_degrees, 
             }
             case 2:
             {
-                pitch_factor_tran=0.5*cosf(radians(pitch_factor_in_degrees));
-                pitch_factor_in_degrees=degrees(acosf(pitch_factor_tran));
-                break;
-            }
-            case 3:
-            {
                 pitch_factor_tran=1-0.5*cosf(radians(arm_angle_degrees));
                 pitch_factor_in_degrees=degrees(acosf(pitch_factor_tran));
                 break;
             }
-            case 4:
+            case 3:
             {
                 pitch_factor_tran=-1+0.5*cosf(radians(arm_angle_degrees));
                 pitch_factor_in_degrees=degrees(acosf(pitch_factor_tran));
@@ -1043,63 +1193,11 @@ void AP_MotorsMatrix::remove_motor(int8_t motor_num)
     }
 }
 
-float AP_MotorsMatrix::equation_degrees(float mid_degrees_1, float servo_angle_degrees_1) //二分法里的方程函数
+float AP_MotorsMatrix::get_arm_angle_degrees()//将舵机角度换算成机臂角度,返回的是两机臂夹角
 {
-    
-    servo_angle_inivalue_rad=radians(0.05);//四旋翼模式下舵机臂与水平（90-舵机臂与固定机臂夹角）夹角，弧度
-    //转换为弧度
-    mid_rad = radians(mid_degrees_1);
-    servo_angle_rad = radians(servo_angle_degrees_1);
-
-    re=l*l - l_servo*l_servo - 2*d*d - 2*d*d*cosf(mid_rad) - 2*d*l_servo*(servo_angle_rad+servo_angle_inivalue_rad) - 2*d*l_servo*(servo_angle_rad+servo_angle_inivalue_rad-mid_rad);
-
-    return re;
-}
-
-float AP_MotorsMatrix::cal_arm_angle_degrees(float servo_angle_degrees_1, float lower_arm_angle_degrees_1, float upper_arm_angle_degrees_1)//用二分法计算移动机臂与固定机臂夹角
-{
-    
-    f_lower = equation_degrees(lower_arm_angle_degrees_1, servo_angle_degrees_1);
-    f_upper = equation_degrees(upper_arm_angle_degrees_1, servo_angle_degrees_1);
-
-    /*if (f_lower * f_upper > 0) {
-        return NAN;
-    }*/
-
-    while ((upper_arm_angle_degrees_1 - lower_arm_angle_degrees_1) > tol) 
-    {
-        mid_degrees = (lower_arm_angle_degrees_1 + upper_arm_angle_degrees_1) / 2.0;
-        f_mid = equation_degrees(mid_degrees, servo_angle_degrees_1);
-
-        if((f_mid<0))
-        {
-            float m=-f_mid;
-            f_mid=m;
-        }
-        if ((f_mid < tol)) 
-        {
-            return mid_degrees; // 找到根
-        }
-
-        if (f_lower * f_mid < 0)
-        {
-            upper_arm_angle_degrees_1 = mid_degrees; // 根在左半区间
-            f_upper = f_mid;
-        } 
-        else
-        {
-            lower_arm_angle_degrees_1 = mid_degrees; // 根在右半区间
-            f_lower = f_mid;
-        }
-    }
-
-    return (lower_arm_angle_degrees_1 + upper_arm_angle_degrees_1) / 2.0; // 返回最终的中点
-}
-
-float AP_MotorsMatrix::get_arm_angle_degrees()//将舵机角度换算成机臂角度
-{
-    //uint16_t rcarm_in=rcarmin_output();//读取移动机臂通道开关位置信息
-    uint16_t rcarm_in=rc().channel(CH_6)->get_radio_in();//读取6通道开关位置信息
+    uint16_t rcarm_in=rcarmin_output();//读取移动机臂通道开关位置信息
+    //gcs().send_text(MAV_SEVERITY_NOTICE, "旋钮pwm值为%d",rcarm_in);
+    //uint16_t rcarm_in=rc().channel(CH_6)->get_radio_in();//读取6通道开关位置信息
     /*if((rcarm_in<=1100))//四旋翼模式
     {
         arm_angle_degrees_1=90.0;
@@ -1111,13 +1209,39 @@ float AP_MotorsMatrix::get_arm_angle_degrees()//将舵机角度换算成机臂�
     if(rcarm_in<1900&&rcarm_in>1100)
     {*/
         f_rcarm_in=float(rcarm_in);//将6通道信号值转为浮点数
-        servo_pwm_value=-1.0275*f_rcarm_in+2967.25;//求6通道每个信号值对应的输出到舵机的pwm值
-        servo_angle_degrees=((servo_pwm_value-1015)/822)*73.68+16.27;//根据舵机的pwm值计算舵机旋转角度
+
+        float k_RC_to_PWM=(pwm_max-pwm_min)/(1100-1900);
+        float b_RC_to_PWM=pwm_max-k_RC_to_PWM*1100;
+
+        servo_pwm_value=k_RC_to_PWM*f_rcarm_in+b_RC_to_PWM;//求6通道每个信号值对应的输出到舵机的pwm值
+
+        //舵盘直驱计算机臂夹角
+        arm_angle_degrees_1=((servo_pwm_value-pwm_min)/(pwm_max-pwm_min))*90;
+        /*
+        //四连杆机构计算机臂夹角
+        servo_angle_degrees=((servo_pwm_value-pwm_min)/(pwm_max-pwm_min))*73.68+16.27;//根据扭转舵机的pwm值计算舵机与固定机臂夹角
+        //servo_angle_degrees=73.68-((servo_pwm_value-925)/850)*73.68;//根据扭转舵机的pwm值计算舵机转角
         
-        arm_angle_degrees_1 = cal_arm_angle_degrees(servo_angle_degrees, lower_arm_angle_degrees, upper_arm_angle_degrees);//计算移动机臂的转角
+
+
+        if(servo_angle_degrees>=16.27&&servo_angle_degrees<=48.62)
+        {
+            arm_angle_degrees_1=0.0064*servo_angle_degrees*servo_angle_degrees+0.579*servo_angle_degrees-10.817;
+        }
+        else if(servo_angle_degrees>48.62&&servo_angle_degrees<=72.19)
+        {
+            arm_angle_degrees_1=0.0076*servo_angle_degrees*servo_angle_degrees+0.35*servo_angle_degrees-4.9661;
+        }
+        else if(servo_angle_degrees>72.19&&servo_angle_degrees<=89.95)
+        {
+            arm_angle_degrees_1=0.0145*servo_angle_degrees*servo_angle_degrees-0.6659*servo_angle_degrees+32.357;
+        }
+
+        gcs().send_text(MAV_SEVERITY_NOTICE, "两机臂夹角为：%f",arm_angle_degrees_1);
         
     //}
-    return (90-arm_angle_degrees_1);
+        */
+    return arm_angle_degrees_1;
     
 }
 

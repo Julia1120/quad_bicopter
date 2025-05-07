@@ -73,7 +73,7 @@ void Copter::Log_Write_Attitude()
     ahrs_view->Write_Rate(*motors, *attitude_control, *pos_control);
  }
 
-// Write PIDS packets
+// Write PIDS packets//记录pid变化
 void Copter::Log_Write_PIDS()
 {
    if (should_log(MASK_LOG_PID)) {

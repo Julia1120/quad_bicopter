@@ -31,6 +31,9 @@ public:
     // Constructor
     AP_MotorsMulticopter(uint16_t speed_hz = AP_MOTORS_SPEED_DEFAULT);
 
+    float _tilt_front;  // -1..1
+    float _tilt_back;  // -1..1
+
     // output - sends commands to the motors
     virtual void        output() override;
     int16_t             rcarmin_output();//根据8通道pwm值决定转动机臂命令是由旋钮发出还是拨杆发出
@@ -73,7 +76,7 @@ public:
     int16_t             get_pwm_output_max() const { return _pwm_max; }
     
     uint16_t            rcarm_in_read;//旋钮控制机臂旋转通道pwm值6通道
-    uint16_t            rcarm_in_calculate;//拨杆切换时计算得到控制机臂旋转通道pwm值9通道
+    // uint16_t            rcarm_in_calculate;//拨杆切换时计算得到控制机臂旋转通道pwm值9通道
     uint16_t            rcarm_in_output;//用于下一步计算的控制机臂旋转通道pwm值
     
     // parameter check for MOT_PWM_MIN/MAX, returns true if parameters are valid

@@ -68,7 +68,7 @@ public:
     // return number of motor that has failed.  Should only be called if get_thrust_boost() returns true
     uint8_t             get_lost_motor() const override { return _motor_lost_index; }
 
-    //int16_t             rcarmin_output();//根据8通道pwm值决定转动机臂命令是由旋钮发出还是拨杆发出
+    int16_t             rcarmin_output();//根据8通道pwm值决定转动机臂命令是由旋钮发出还是拨杆发出
 
     // return the roll factor of any motor, this is used for tilt rotors and tail sitters
     // using copter motors for forward flight
@@ -93,33 +93,65 @@ public:
     // method to add many motors specified in a structure:
     void add_motors(const struct MotorDef *motors, uint8_t num_motors);
 
-    float equation_degrees(float mid, float servo_angle);//二分法里的方程函数
-    float get_arm_angle_degrees();//将舵机角度换算成机臂角度
-    float cal_arm_angle_degrees(float servo_angle, float lower_arm_angle, float upper_arm_angle);//二分法计算移动机臂与固定机臂夹角
+    float get_arm_angle_degrees();//将舵机角度换算成机臂角度，返回的是两机臂夹角
+
     float arm_angle_degrees;//两机臂夹角
     float motor1_angle_degrees;//1号电机所在角度
     float motor2_angle_degrees;//2号电机所在角度
-    float re;//计算后的返回值
-    float l_servo=28.0;//舵机臂长度
-    float l=47.3497624;//棍儿的长度
-    float d=19.091883;//扭转盘到中心以及舵机转轴到中心的距离
     float servo_angle_inivalue_rad;//四旋翼模式下舵机臂与水平（90-舵机臂与固定机臂夹角）夹角，弧度
     //转换为弧度
     float mid_rad;
-    float servo_angle_rad;
-    //以下是二分法用到的参数
-    float mid_degrees = 0.0;
-    float tol=1e-6;//控制结果精度
-    float f_lower;
-    float f_upper;
-    float f_mid;
-    //二分法结束
+    float servo_angle_rad;//舵机转过角度
+
+    /*
+    float pwm_min=975;//舵机接受的pwm信号最小值
+    float pwm_max=1875;//舵机接受的pwm信号最大值
+    */
+    
     float f_rcarm_in;//6通道信号值的浮点数形式
     float servo_pwm_value;//舵机接收的信号值
-    float servo_angle_degrees;//舵机旋转角度
-    float arm_angle_degrees_1=90.0;//机臂旋转角度
-    float lower_arm_angle_degrees = 0.0;//移动机臂最小夹角
-    float upper_arm_angle_degrees = 90.0;//移动机臂最大夹角
+    float servo_angle_degrees;//舵机与固定机臂夹角
+    float arm_angle_degrees_1;//机臂夹角
+
+    //测力天平版数据
+    float pwm_min=950;//舵机接受的pwm信号最小值
+    float pwm_max=1925;//舵机接受的pwm信号最大值
+    //测力天平版数据结束
+
+    /*float _tilt_front;  // -1..1
+    float _tilt_back;  // -1..1
+    */
+
+    
+    //计算重叠旋翼推力损失
+    float k_lose_angle;//推力损失系数
+    float T0_N=13.25;
+    float Tt_N=10.725;
+
+    //10-23度公式参数
+    float Intercept=40.06375;
+    float B1=-7.46594;
+    float B2=0.67227;
+    float B3=-0.0253;
+    float B4=3.46792*0.0001;
+
+    /*
+    //23-40度公式参数
+    float K1=0.05236;
+    float B11=10.81012;
+
+    //40-47度公式参数
+    float Y0=13.36397;
+    float A0=-2.70665;
+    float W0=0.6868;
+    float Xc0=40.79513;
+    */
+
+    float cal_T_lose(float arm_angle_degree_cal);//根据机臂夹角分段计算推力损失,返回值为1-损失，即实际推力沾不受气流影响时比例
+    //float cal_little_T_los(float arm_angle_degrees_cal);//计算47.5875-40.5度推力损失,返回值为1-损失，即实际推力沾不受气流影响时比例
+    float cal_part_T_los(float arm_angle_degrees_cal);//计算10-23.0625度推力损失,返回值为1-损失，即实际推力沾不受气流影响时比例
+    float cal_total_T_los(float arm_angle_degrees_cal);//计算0-10度推力损失,返回值为1-损失，即实际推力沾不受气流影响时比例
+    
 
     // structure used for initialising motors that add have separate
     // roll/pitch/yaw factors.  Note that this does *not* include
@@ -140,7 +172,7 @@ public:
 
 protected:
     // output - sends commands to the motors
-    void                output_armed_stabilizing() override;
+    void                output_armed_stabilizing() override;//过渡模式稳定
     void                quad_output_armed_stabilizing() override;//四旋翼模式稳定
     void                dual_output_armed_stabilizing() override;//双旋翼模式稳定
 
@@ -195,8 +227,11 @@ protected:
 
         
     bool _has_diff_thrust;
-    float _tilt_front;  // -1..1
-    float _tilt_back;  // -1..1
+    
+
+    //float tran_tilt_front;  // -1..1
+    //float tran_tilt_back;  // -1..1
+    float roll_servo_thrust;
 
     float _throttle; // 0..1
     float _thrust_front;  // 0..1

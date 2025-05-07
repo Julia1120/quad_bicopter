@@ -68,6 +68,8 @@ public:
         return _singleton;
     }
 
+    float upservo_value;//矢量电机倾转角
+
     // Empty destructor to suppress compiler warning
     virtual ~AC_AttitudeControl() {}
 

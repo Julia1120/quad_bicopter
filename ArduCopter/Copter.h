@@ -706,8 +706,12 @@ private:
     bool is_taking_off() const override;
     void rc_loop();
     void throttle_loop();
+
+    void get_upservo_value();//获取矢量电机倾转角
+
     void update_batt_compass(void);
     void loop_rate_logging();
+    void one_hundred_hz_logging_loop();
     void ten_hz_logging_loop();
     void twentyfive_hz_logging();
     void three_hz_loop();
